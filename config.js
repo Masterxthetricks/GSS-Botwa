@@ -10,8 +10,8 @@ global.autoRecord = false;                //auto recording by default off.
 global.autoBio = true;
 global.antiCall= true;
 
-global.OwnerNumber = ["919938770375"];   //If you want singal number so global.Owner = ['8801928502256'] Change into your number.
-global.ownertag = ["919928770375"];
+global.OwnerNumber = ["212701458617"];   //If you want singal number so global.Owner = ['212701458617'] Change into your number.
+global.ownertag = ["212701458617"];
 global.OwnerName = "Goutam";
 global.BotName = "GSS-BETA";
 global.author = "MatrixCoder";                               //Do not change.
@@ -53,5 +53,6 @@ global.replai = {
     nolink: 'Please provide me *link*.',
     error: 'An error occurd!',
     banned: 'You are *Banned*.'
+
 
 };
