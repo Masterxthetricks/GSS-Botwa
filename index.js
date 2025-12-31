@@ -17,7 +17,7 @@ const sessionPath = path.join(__dirname, 'session');
 
 // 📝 CONFIGURATION
 const phoneNumber = "212701458617"; 
-global.owner = [""212701458617", "85182757527702"]; 
+global.owner = ["212701458617", "85182757527702"]; 
 
 if (!global.serverStarted) {
     app.get('/', (req, res) => res.send('Bot Status: Online'));
