@@ -1,58 +1,85 @@
 require("dotenv").config();
-const fs = require("fs");
-const path = require('path');
-const express = require('express');
-const app = express();
-const port = process.env.PORT || 8080;
 const {
     default: goutamConnect,
     useMultiFileAuthState,
     Browsers,
+    delay,
+    disconnectReason
 } = require("@whiskeysockets/baileys");
-const chalk = require("chalk");
+const fs = require("fs");
+const path = require('path');
 const pino = require("pino");
-const qrcode = require('qrcode-terminal'); // Matches your package.json
+const chalk = require("chalk");
+const qrcode = require('qrcode-terminal');
+const express = require('express');
 
-// 1. CLEAR SESSION TO PREVENT 405/401 ERRORS
+const app = express();
+const port = process.env.PORT || 8080;
+
+// --- 1. SESSION CLEANER (FIXES 405 ERROR) ---
 const sessionPath = path.join(__dirname, 'session');
 if (fs.existsSync(sessionPath)) {
-    console.log(chalk.yellow("🧹 Clearing old session for fresh QR..."));
+    console.log(chalk.yellow("🧹 Cleaning old session files to prevent 405 loop..."));
     fs.rmSync(sessionPath, { recursive: true, force: true });
 }
 
 async function startBot() {
-    console.log(chalk.blue("\n--- INITIALIZING BOT ---"));
-    
-    const { state, saveCreds } = await useMultiFileAuthState('./session');
+    console.log(chalk.blue.bold("\n🚀 INITIALIZING GSS-BOTWA..."));
+
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        printQRInTerminal: false, // We handle this manually for Koyeb
-       browser: Browsers.ubuntu('Chrome'), 
-        auth: state
-     });
+        printQRInTerminal: false, // We handle this manually below
+        // Browser identity changed to prevent WhatsApp rejection
+        browser: ["Ubuntu", "Chrome", "20.0.04"], 
+        auth: state,
+        patchMessageBeforeSending: (message) => {
+            const requiresPatch = !!(
+                message.buttonsMessage ||
+                message.templateMessage ||
+                message.listMessage
+            );
+            if (requiresPatch) {
+                message = {
+                    viewOnceMessage: {
+                        message: {
+                            messageContextInfo: {
+                                deviceListMetadata: {},
+                                deviceListMetadataVersion: 2,
+                            },
+                            ...message,
+                        },
+                    },
+                };
+            }
+            return message;
+        },
+    });
 
-    // 2. CONNECTION HANDLER
+    // --- 2. CONNECTION HANDLER ---
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         if (qr) {
-            console.log(chalk.magenta("\n📸 SCAN THE QR CODE BELOW:"));
-            // This 'small: true' is vital for Koyeb logs
+            console.log(chalk.magenta.bold("\n📸 SCAN THE QR CODE BELOW:"));
             qrcode.generate(qr, { small: true });
-            console.log(chalk.cyan("Note: Zoom out your browser (Ctrl -) if the QR looks messy.\n"));
+            console.log(chalk.cyan("Note: Zoom out (Ctrl -) if the QR looks distorted.\n"));
         }
 
         if (connection === "open") {
-            console.log(chalk.green("\n✅ SUCCESS: BOT IS LINKED AND ONLINE"));
+            console.log(chalk.green.bold("\n✅ SUCCESS: BOT IS ONLINE AND CONNECTED"));
         }
 
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection closed. Code: ${reason}`));
-            // Auto-restart logic
-            if (reason !== 401) {
-                console.log(chalk.yellow("🔄 Restarting..."));
+            console.log(chalk.red(`⚠️ Connection closed. Reason Code: ${reason}`));
+
+            // If the code is 405 or 401, we need a full restart
+            if (reason === 405 || reason === 401) {
+                console.log(chalk.red("CRITICAL ERROR: Browser rejected. Restarting fresh..."));
+                startBot();
+            } else {
                 startBot();
             }
         }
@@ -60,22 +87,29 @@ async function startBot() {
 
     client.ev.on("creds.update", saveCreds);
 
-    // 3. MESSAGE HANDLER
+    // --- 3. MESSAGE HANDLER ---
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
-            let mek = chatUpdate.messages[0];
+            const mek = chatUpdate.messages[0];
             if (!mek.message) return;
-            // This links to your bot.js file
-            require("./bot")(client, mek, chatUpdate);
+            
+            // This links to your bot.js file logic
+            // Ensure bot.js exists in your main folder!
+            if (fs.existsSync('./bot.js')) {
+                require("./bot")(client, mek, chatUpdate);
+            }
         } catch (err) {
-            console.log(chalk.red("Error in bot.js: "), err.message);
+            console.log(chalk.red("Error in message handler: "), err);
         }
     });
+
+    return client;
 }
 
-// 4. START
-startBot().catch(err => console.log("Start Error: ", err));
+// --- 4. START & HEALTH CHECK ---
+startBot().catch(err => console.log("Startup Error: ", err));
 
-// Health Check for Koyeb
-app.get('/', (req, res) => res.send('Bot is Alive'));
-app.listen(port, "0.0.0.0", () => console.log(`Server running on port ${port}`));
+app.get('/', (req, res) => res.send('Bot is Running!'));
+app.listen(port, "0.0.0.0", () => {
+    console.log(chalk.green(`📡 Health Check Server running on port ${port}`));
+});
