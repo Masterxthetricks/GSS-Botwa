@@ -128,6 +128,6 @@ async function startHisoka() {
 
 startHisoka(); 
 app.get('/', (req, res) => res.send('Bot Status: Online'));
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(port, "0.0.0.0", () => {
     console.log(`Server is listening on port ${port}`);
 });
