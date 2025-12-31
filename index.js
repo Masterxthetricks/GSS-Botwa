@@ -11,81 +11,71 @@ const {
 } = require("@whiskeysockets/baileys");
 const chalk = require("chalk");
 const pino = require("pino");
-const qrcode = require('qrcode-terminal');
+const qrcode = require('qrcode-terminal'); // Matches your package.json
 
-// 1. CLEAN START: Auto-delete old session to prevent loops
-const sessionFolder = path.join(__dirname, 'session');
-if (fs.existsSync(sessionFolder)) {
-    console.log(chalk.yellow("🧹 Cleaning old session files for a fresh QR..."));
-    fs.rmSync(sessionFolder, { recursive: true, force: true });
+// 1. CLEAR SESSION TO PREVENT 405/401 ERRORS
+const sessionPath = path.join(__dirname, 'session');
+if (fs.existsSync(sessionPath)) {
+    console.log(chalk.yellow("🧹 Clearing old session for fresh QR..."));
+    fs.rmSync(sessionPath, { recursive: true, force: true });
 }
 
-if (!fs.existsSync('./antilink.json')) {
-    fs.writeFileSync('./antilink.json', JSON.stringify([]));
-}
-
-async function startHisoka() {
-    console.log(chalk.blue("\n--- BOT STARTING (QR MODE) ---"));
+async function startBot() {
+    console.log(chalk.blue("\n--- INITIALIZING BOT ---"));
     
     const { state, saveCreds } = await useMultiFileAuthState('./session');
 
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        printQRInTerminal: false, // We will handle this manually below
+        printQRInTerminal: false, // We handle this manually for Koyeb
         browser: Browsers.macOS('Desktop'),
         auth: state
     });
 
-    // 2. CONNECTION MONITOR
+    // 2. CONNECTION HANDLER
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        // Manual QR Display
         if (qr) {
-            console.log(chalk.magenta("\n📸 NEW QR CODE DETECTED:"));
-            console.log(chalk.white("Scan this with WhatsApp > Linked Devices > Link a Device\n"));
-            qrcode.generate(qr, { small: true }); 
-            console.log(chalk.cyan("\nTip: If the QR looks broken, zoom out (Ctrl + -) in your browser.\n"));
+            console.log(chalk.magenta("\n📸 SCAN THE QR CODE BELOW:"));
+            // This 'small: true' is vital for Koyeb logs
+            qrcode.generate(qr, { small: true });
+            console.log(chalk.cyan("Note: Zoom out your browser (Ctrl -) if the QR looks messy.\n"));
         }
 
         if (connection === "open") {
-            console.log(chalk.green("\n✅ SUCCESS: CONNECTED TO WHATSAPP"));
+            console.log(chalk.green("\n✅ SUCCESS: BOT IS LINKED AND ONLINE"));
         }
 
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection closed. Reason: ${reason}`));
-            
-            // Restart if not a manual logout
+            console.log(chalk.red(`⚠️ Connection closed. Code: ${reason}`));
+            // Auto-restart logic
             if (reason !== 401) {
-                console.log(chalk.yellow("🔄 Restarting bot..."));
-                startHisoka();
-            } else {
-                console.log(chalk.bgRed("❌ Logged out. Delete 'session' and restart manually."));
+                console.log(chalk.yellow("🔄 Restarting..."));
+                startBot();
             }
         }
     });
+
+    client.ev.on("creds.update", saveCreds);
 
     // 3. MESSAGE HANDLER
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             let mek = chatUpdate.messages[0];
             if (!mek.message) return;
-            // Ensure bot.js exists in your directory
+            // This links to your bot.js file
             require("./bot")(client, mek, chatUpdate);
         } catch (err) {
-            console.log(chalk.red("Error in messages: "), err);
+            console.log(chalk.red("Error in bot.js: "), err.message);
         }
     });
-
-    client.ev.on("creds.update", saveCreds);
 }
 
-// Start the process
-startHisoka();
+// 4. START
+startBot().catch(err => console.log("Start Error: ", err));
 
-// 4. WEB SERVER (Health Check)
-app.get('/', (req, res) => res.send('Bot Online'));
-app.listen(port, "0.0.0.0", () => {
-    console.log(chalk.magenta(`📡 Server listening on port ${port}`));
-});
+// Health Check for Koyeb
+app.get('/', (req, res) => res.send('Bot is Alive'));
+app.listen(port, "0.0.0.0", () => console.log(`Server running on port ${port}`));
