@@ -1,17 +1,16 @@
 require("dotenv").config();
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    delay,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    DisconnectReason
-} = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
-const pino = require("pino");
-const chalk = require("chalk");
 const express = require('express');
+const {
+    default: goutamConnect,
+    useMultiFileAuthState,
+    delay,
+    fetchLatestBaileysVersion
+} = require("@whiskeysockets/baileys");
+const chalk = require("chalk");
+const pino = require("pino");
+const util = require("util");
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -19,90 +18,99 @@ const sessionPath = path.join(__dirname, 'session');
 
 // 📝 CONFIGURATION
 const phoneNumber = "212701458617"; 
-global.owner = ["212701458617"]; // Added for owner verification
+global.owner = ["212701458617"]; 
 
-// Prevent EADDRINUSE by checking if server is already running
+// --- 🌐 WEB SERVER (Prevents Koyeb Port Error) ---
 if (!global.serverStarted) {
-    app.get('/', (req, res) => res.send('Bot is Running'));
-    app.listen(port, "0.0.0.0", () => {
-        console.log(chalk.green(`🌐 Web Server running on port ${port}`));
-    });
+    app.get('/', (req, res) => res.send('Bot Status: Online'));
+    app.listen(port, "0.0.0.0", () => console.log(chalk.green(`🌐 Server running on port: ${port}`)));
     global.serverStarted = true;
 }
 
-async function startBot() {
+async function startHisoka() {
+    console.log(chalk.blue.bold("\n--- 🤖 WHATSAPP BOT STARTING ---"));
+
+    // 🧹 AUTO-CLEAN: Deletes old broken session files before starting
+    if (fs.existsSync(sessionPath)) {
+        console.log(chalk.yellow("Cleaning old session data..."));
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+    }
+    
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
-    const client = makeWASocket({
+    const client = goutamConnect({
         version,
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
-        browser: ["Ubuntu", "Chrome", "20.0.04"], 
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
-        },
+        // ✅ High-stability browser identity
+        browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
+        auth: state
     });
 
     // --- 🔑 PAIRING CODE LOGIC ---
     if (!client.authState.creds.registered) {
         console.log(chalk.cyan.bold(`\n📲 Requesting Pairing Code for: ${phoneNumber}...`));
-        await delay(5000); // Increased delay for stability
+        await delay(7000); // Wait for connection to stabilize
         try {
             const code = await client.requestPairingCode(phoneNumber);
             console.log(chalk.white.bgMagenta.bold(`\n YOUR PAIRING CODE: ${code} \n`));
-            console.log(chalk.yellow("Step 1: Open WhatsApp > Linked Devices"));
-            console.log(chalk.yellow("Step 2: Link a Device > Link with phone number instead"));
-            console.log(chalk.yellow(`Step 3: Type the code above [${code}] into your phone.\n`));
-        } catch (error) {
-            console.error("Failed to request pairing code:", error);
+        } catch (err) {
+            console.log(chalk.red("Pairing error: "), err);
         }
     }
 
+    // --- 📡 CONNECTION UPDATES ---
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === "open") {
-            console.log(chalk.green.bold("\n✅ SUCCESS: BOT IS ONLINE"));
-            // Self-message to confirm ownership
-            await client.sendMessage(phoneNumber + "@s.whatsapp.net", { text: "🛡️ Bot is now connected and you are recognized as Owner." });
+            console.log(chalk.green.bold("\n✅ SUCCESS: CONNECTED TO WHATSAPP"));
         }
         if (connection === "close") {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log(chalk.red(`Connection closed. Reconnecting: ${shouldReconnect}`));
-            if (shouldReconnect) startBot();
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            console.log(chalk.red(`⚠️ Connection closed (Code: ${reason}).`));
+            
+            // Avoid loops if logged out or stream conflict
+            if (reason === 401) {
+                console.log(chalk.bgRed("LOGGED OUT: Please delete session folder and re-pair."));
+            } else {
+                await delay(5000);
+                startHisoka();
+            }
         }
     });
 
     client.ev.on("creds.update", saveCreds);
 
+    // --- 📩 MESSAGE HANDLER ---
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             const mek = chatUpdate.messages[0];
             if (!mek.message || mek.key.fromMe) return;
 
-            // Log messages to see if they arrive
-            const mText = mek.message.conversation || mek.message.extendedTextMessage?.text;
-            console.log(chalk.blue(`📩 Message from ${mek.key.remoteJid}: ${mText}`));
+            const from = mek.key.remoteJid;
+            const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || "").trim();
+            const isCmd = body.startsWith(".");
+            const command = isCmd ? body.slice(1).trim().split(/ +/).shift().toLowerCase() : "";
+            const args = body.trim().split(/ +/).slice(1);
 
-            // Safe Handler execution
-            if (fs.existsSync('./bot.js')) {
-                const handler = require("./bot");
-                if (typeof handler === 'function') {
-                    handler(client, mek, chatUpdate);
-                } else if (handler.default && typeof handler.default === 'function') {
-                    handler.default(client, mek, chatUpdate);
-                }
+            const sender = mek.key.participant || mek.key.remoteJid;
+            const isOwner = global.owner.some(num => sender.includes(num.replace(/\D/g, '')));
+
+            if (!isCmd) return;
+
+            switch (command) {
+                case 'menu':
+                case 'ping':
+                    await client.sendMessage(from, { text: "Bot is Online! 🚀" }, { quoted: mek });
+                    break;
+                case 'owner':
+                    if (!isOwner) return await client.sendMessage(from, { text: "❌ Denied." });
+                    await client.sendMessage(from, { text: "✅ Confirmed: You are the Owner." });
+                    break;
             }
-        } catch (err) {
-            console.log(chalk.red("Error in message handler:"), err);
-        }
+        } catch (err) { console.log(err); }
     });
-
-    return client;
 }
 
-// Start with error handling
-startBot().catch(err => {
-    console.error("Critical error starting bot:", err);
-});
+startHisoka().catch(err => console.log(err));
