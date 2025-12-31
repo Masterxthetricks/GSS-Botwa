@@ -3,72 +3,57 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     Browsers,
-    DisconnectReason,
+    delay,
     fetchLatestBaileysVersion
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
 const pino = require("pino");
 const chalk = require("chalk");
-const qrcode = require('qrcode-terminal');
 const express = require('express');
 
 const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
-// Clean session on critical failures
-function clearSession() {
-    if (fs.existsSync(sessionPath)) {
-        console.log(chalk.yellow("🧹 Clearing session to fix connection..."));
-        fs.rmSync(sessionPath, { recursive: true, force: true });
-    }
-}
+// 📝 CONFIGURATION
+const phoneNumber = "YOUR_PHONE_NUMBER_HERE"; // Example: "2348012345678"
 
 async function startBot() {
-    console.log(chalk.blue.bold("\n🚀 INITIALIZING GSS-BOTWA..."));
-
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
     const client = makeWASocket({
         version,
         logger: pino({ level: "silent" }),
-        printQRInTerminal: false, // Custom handling below
-        browser: Browsers.ubuntu('Chrome'), 
+        printQRInTerminal: false,
+        browser: ["Ubuntu", "Chrome", "20.0.04"], 
         auth: state,
     });
 
-    client.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            // Clear the console so the QR is at the very top
-            console.clear(); 
-            console.log(chalk.magenta.bold("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
-            console.log(chalk.magenta.bold("📸 SCAN THE QR CODE BELOW:"));
-            console.log(chalk.magenta.bold("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
-            
-            // Using small: false makes the QR code significantly larger
-            // This prevents lines from merging in the Koyeb console.
-            qrcode.generate(qr, { small: false });
-            
-            console.log(chalk.cyan("\n💡 TIP: If it's too big, use (Ctrl and -) to zoom out."));
-            console.log(chalk.cyan("💡 TIP: Ensure your terminal is in DARK MODE.\n"));
+    // --- 🔑 PAIRING CODE LOGIC ---
+    if (!client.authState.creds.registered) {
+        if (!phoneNumber) {
+            console.log(chalk.red.bold("❌ ERROR: No phone number provided in index.js for pairing!"));
+        } else {
+            console.log(chalk.cyan.bold(`\n📲 Requesting Pairing Code for: ${phoneNumber}...`));
+            await delay(3000); // Wait for socket to stabilize
+            const code = await client.requestPairingCode(phoneNumber);
+            console.log(chalk.white.bgMagenta.bold(`\n YOUR PAIRING CODE: ${code} \n`));
+            console.log(chalk.yellow("Step 1: Open WhatsApp > Linked Devices"));
+            console.log(chalk.yellow("Step 2: Link a Device > Link with phone number instead"));
+            console.log(chalk.yellow(`Step 3: Type the code above [${code}] into your phone.\n`));
         }
+    }
 
+    client.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
         if (connection === "open") {
             console.log(chalk.green.bold("\n✅ SUCCESS: BOT IS ONLINE"));
         }
-
         if (connection === "close") {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            if (statusCode === 405 || statusCode === 401) {
-                clearSession();
-                setTimeout(() => startBot(), 5000);
-            } else if (statusCode !== DisconnectReason.loggedOut) {
-                startBot();
-            }
+            if (statusCode !== 401) startBot();
         }
     });
 
@@ -82,7 +67,7 @@ async function startBot() {
                 require("./bot")(client, mek, chatUpdate);
             }
         } catch (err) {
-            console.log(chalk.red("Error: "), err);
+            console.log(err);
         }
     });
 
@@ -90,5 +75,5 @@ async function startBot() {
 }
 
 startBot().catch(err => console.log(err));
-app.get('/', (req, res) => res.send('Bot Active'));
+app.get('/', (req, res) => res.send('Pairing Mode Active'));
 app.listen(port, "0.0.0.0");
