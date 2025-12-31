@@ -56,21 +56,21 @@ async function startHisoka() {
             console.log(chalk.cyan("🔄 Connecting to WhatsApp..."));
         }
 
-        // REQUEST PAIRING CODE LOGIC
+       // REQUEST PAIRING CODE LOGIC
         if (connection === "connecting" && !client.authState.creds.registered) {
             console.log(chalk.yellow(`📢 Requesting pairing code for: ${PHONE_NUMBER}`));
             
-            // Wait 10 seconds to ensure the socket is ready
+            // INCREASED TO 20 SECONDS
             setTimeout(async () => {
                 try {
                     let code = await client.requestPairingCode(PHONE_NUMBER);
                     code = code?.match(/.{1,4}/g)?.join("-") || code;
                     console.log(chalk.black.bgGreen(`\n\n  --- YOUR PAIRING CODE: ${code} ---  \n`));
-                    console.log(chalk.white("Steps: Open WhatsApp > Linked Devices > Link with Phone Number > Enter the code above.\n"));
                 } catch (e) {
                     console.log(chalk.red("❌ Pairing error: "), e.message);
                 }
-            }, 10000);
+            }, 20000); // <--- Change this to 20000
+        }
         }
 
         if (connection === "close") {
