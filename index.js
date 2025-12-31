@@ -3,9 +3,8 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     Browsers,
-    delay,
     DisconnectReason,
-    fetchLatestBaileysVersion // Critical for fixing 405
+    fetchLatestBaileysVersion
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
@@ -18,11 +17,10 @@ const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
-// --- 1. SESSION CLEANER ---
-// If the bot gets stuck in a 405 loop, we clear the folder to force a new QR
+// Clean session on critical failures
 function clearSession() {
     if (fs.existsSync(sessionPath)) {
-        console.log(chalk.yellow("🧹 Clearing corrupted session to bypass 405..."));
+        console.log(chalk.yellow("🧹 Clearing session to fix connection..."));
         fs.rmSync(sessionPath, { recursive: true, force: true });
     }
 }
@@ -31,28 +29,32 @@ async function startBot() {
     console.log(chalk.blue.bold("\n🚀 INITIALIZING GSS-BOTWA..."));
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    
-    // --- 2. GET LATEST WA VERSION ---
-    // This tells WhatsApp we are using the most current web client
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(chalk.cyan(`📡 Using WA Version: ${version.join('.')} (Latest: ${isLatest})`));
+    const { version } = await fetchLatestBaileysVersion();
 
     const client = makeWASocket({
-        version, // Dynamic versioning bypasses 405
+        version,
         logger: pino({ level: "silent" }),
-        printQRInTerminal: false,
-        // Using a generic Linux browser signature
+        printQRInTerminal: false, // Custom handling below
         browser: Browsers.ubuntu('Chrome'), 
         auth: state,
     });
 
-    // --- 3. CONNECTION HANDLER ---
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log(chalk.magenta.bold("\n📸 SCAN THE QR CODE BELOW:"));
-            qrcode.generate(qr, { small: true });
+            // Clear the console so the QR is at the very top
+            console.clear(); 
+            console.log(chalk.magenta.bold("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+            console.log(chalk.magenta.bold("📸 SCAN THE QR CODE BELOW:"));
+            console.log(chalk.magenta.bold("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+            
+            // Using small: false makes the QR code significantly larger
+            // This prevents lines from merging in the Koyeb console.
+            qrcode.generate(qr, { small: false });
+            
+            console.log(chalk.cyan("\n💡 TIP: If it's too big, use (Ctrl and -) to zoom out."));
+            console.log(chalk.cyan("💡 TIP: Ensure your terminal is in DARK MODE.\n"));
         }
 
         if (connection === "open") {
@@ -61,10 +63,7 @@ async function startBot() {
 
         if (connection === "close") {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection closed. Code: ${statusCode}`));
-
             if (statusCode === 405 || statusCode === 401) {
-                console.log(chalk.red("CRITICAL: 405 Detected. Resetting session in 5s..."));
                 clearSession();
                 setTimeout(() => startBot(), 5000);
             } else if (statusCode !== DisconnectReason.loggedOut) {
@@ -75,15 +74,10 @@ async function startBot() {
 
     client.ev.on("creds.update", saveCreds);
 
-    // --- 4. MESSAGE HANDLER ---
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             const mek = chatUpdate.messages[0];
             if (!mek.message || mek.key.fromMe) return;
-            
-            // Log incoming message for debugging
-            console.log(chalk.gray(`📩 Message from ${mek.key.remoteJid}`));
-
             if (fs.existsSync('./bot.js')) {
                 require("./bot")(client, mek, chatUpdate);
             }
@@ -95,7 +89,6 @@ async function startBot() {
     return client;
 }
 
-// Start & Health Check
 startBot().catch(err => console.log(err));
-app.get('/', (req, res) => res.send('GSS-Bot is Active'));
+app.get('/', (req, res) => res.send('Bot Active'));
 app.listen(port, "0.0.0.0");
