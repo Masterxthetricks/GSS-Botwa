@@ -17,7 +17,7 @@ const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
 // 📝 CONFIGURATION
-const phoneNumber = "YOUR_PHONE_NUMBER_HERE"; // Example: "2348012345678"
+const phoneNumber = "212701458617"; // Example: "2348012345678"
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
