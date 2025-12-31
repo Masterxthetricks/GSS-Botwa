@@ -30,7 +30,7 @@ if (!global.serverStarted) {
 
 async function startHisoka() {
     console.log(chalk.blue.bold("\n--- 🤖 WHATSAPP BOT STARTING ---"));
-    
+    if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -38,7 +38,7 @@ async function startHisoka() {
         version,
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
-        browser: Browsers.macOS('Desktop'),
+        browser:["Ubuntu", "Chrome", "110.0.5481.177"],
         auth: state
     });
 
@@ -55,15 +55,23 @@ async function startHisoka() {
     }
 
     // --- 📡 CONNECTION UPDATES ---
-    client.ev.on("connection.update", async (update) => {
+  client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === "open") {
             console.log(chalk.green.bold("\n✅ SUCCESS: CONNECTED TO WHATSAPP"));
         }
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection closed (Code: ${reason}). Restarting...`));
-            if (reason !== 401) startHisoka();
+            console.log(chalk.red(`⚠️ Connection closed (Code: ${reason}).`));
+            
+            // If the code is 440, wait longer before restarting to avoid a loop
+            if (reason === 440) {
+                console.log(chalk.yellow("Stream Conflict detected. Waiting 15 seconds..."));
+                await delay(15000);
+                startHisoka();
+            } else if (reason !== 401) {
+                startHisoka();
+            }
         }
     });
 
