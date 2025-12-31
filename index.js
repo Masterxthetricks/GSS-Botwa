@@ -42,17 +42,40 @@ const store = makeInMemoryStore({
 }); 
 
 async function startHisoka() { 
-   // We use 'session' folder for persistence
+    console.log(chalk.blue("--- BOT INITIALIZING ---"));
+   console.log("Checking Environment Variables...");
+   console.log("PAIRING_CODE:", process.env.PAIRING_CODE);
+   console.log("PHONE_NUMBER:", process.env.PHONE_NUMBER ? "DEFINED" : "MISSING");
+  
+    // We use 'session' folder for persistence
    const { state, saveCreds } = await useMultiFileAuthState(`./session`); 
    const { version } = await fetchLatestBaileysVersion(); 
 
+  // 1. This initializes the connection
    const client = goutamConnect({ 
       logger: pino({ level: "silent" }), 
-      printQRInTerminal: true, 
-      browser: Browsers.macOS('Desktop'),
+      printQRInTerminal: !process.env.PAIRING_CODE, // If pairing code is ON, don't show QR
+      browser: ["Ubuntu", "Chrome", "20.0.04"], // Best setting for Koyeb
       auth: state 
-   }); 
-
+   });
+  
+    // --- PAIRING CODE LOGIC ---
+   if (process.env.PAIRING_CODE === "true" && !client.authState.creds.registered) {
+      const phoneNumber = process.env.PHONE_NUMBER; 
+      console.log(chalk.yellow("Requesting pairing code... please wait."));
+      
+      setTimeout(async () => {
+         try { 
+            let code = await client.requestPairingCode(phoneNumber);
+            code = code?.match(/.{1,4}/g)?.join("-") || code;
+            console.log(chalk.black.bgGreen(`\n--- YOUR PAIRING CODE: ${code} ---\n`));
+         } catch (error) {
+            console.error("Error generating pairing code:", error);
+         }
+      }, 10000); // 10 seconds is safer for Koyeb
+   } else if (client.authState.creds.registered) {
+      console.log(chalk.green("Bot is already registered/logged in."));
+   }
    client.ev.on("messages.upsert", async (chatUpdate) => { 
      try { 
        let mek = chatUpdate.messages[0]; 
