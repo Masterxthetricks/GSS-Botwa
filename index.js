@@ -140,16 +140,35 @@ async function startHisoka() {
      } catch (err) { console.log(err); } 
    }); 
 
-   client.ev.on("connection.update", (update) => {
-       const { connection } = update;
-       if (connection === "open") console.log(chalk.green("CONNECTED TO WHATSAPP"));
-       if (connection === "close") startHisoka();
+client.ev.on("connection.update", async (update) => {
+       const { connection, lastDisconnect } = update;
+       
+       if (connection === "open") {
+           console.log(chalk.green("CONNECTED TO WHATSAPP"));
+       }
+
+       // --- NEW PAIRING CODE LOGIC: ONLY RUNS WHEN READY ---
+       if (connection === "connecting" && process.env.PAIRING_CODE === "true" && !client.authState.creds.registered) {
+           console.log(chalk.yellow("Connection established. Requesting code for: " + process.env.PHONE_NUMBER));
+           
+           // Small 3-second delay to ensure the socket is stable
+           setTimeout(async () => {
+               try {
+                   let code = await client.requestPairingCode(process.env.PHONE_NUMBER);
+                   code = code?.match(/.{1,4}/g)?.join("-") || code;
+                   console.log(chalk.black.bgGreen(`\n--- YOUR PAIRING CODE: ${code} ---\n`));
+               } catch (e) {
+                   console.error(chalk.red("Pairing Request Failed:"), e.message);
+               }
+           }, 3000);
+       }
+
+       if (connection === "close") {
+           console.log(chalk.red("Connection closed. Restarting..."));
+           startHisoka();
+       }
    });
-
-   client.ev.on("creds.update", saveCreds); 
-} 
-
-startHisoka(); 
+    
 app.get('/', (req, res) => res.send('Bot Status: Online'));
 app.listen(port, "0.0.0.0", () => {
     console.log(`Server is listening on port ${port}`);
