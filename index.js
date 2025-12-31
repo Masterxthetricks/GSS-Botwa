@@ -7,12 +7,12 @@ const {
     default: goutamConnect,
     useMultiFileAuthState,
     Browsers,
-    pino,
 } = require("@whiskeysockets/baileys");
 const chalk = require("chalk");
+const pino = require("pino");
 
 // --- CONFIGURATION ---
-const PHONE_NUMBER = "212701458617"; // Your number is now fixed here
+const PHONE_NUMBER = "212701458617"; 
 // ---------------------
 
 if (!fs.existsSync('./antilink.json')) {
@@ -22,45 +22,40 @@ if (!fs.existsSync('./antilink.json')) {
 async function startHisoka() {
     console.log(chalk.blue("--- BOT STARTING ---"));
     
-    // Auth State
     const { state, saveCreds } = await useMultiFileAuthState('./session');
 
     const client = goutamConnect({
-        logger: require("pino")({ level: "silent" }),
-        printQRInTerminal: false, // We are using pairing code
+        logger: pino({ level: "silent" }),
+        printQRInTerminal: false,
         browser: Browsers.ubuntu('Chrome'),
         auth: state
     });
 
-    // Handle Incoming Messages
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             let mek = chatUpdate.messages[0];
             if (!mek.message) return;
-            // This calls your bot.js logic
             require("./bot")(client, mek, chatUpdate);
         } catch (err) {
             console.log(chalk.red("Error in messages.upsert: "), err);
         }
     });
 
-    // Handle Connection Updates
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
         
         if (connection === "open") {
-            console.log(chalk.green("✅ CONNECTED TO WHATSAPP SUCCESSFULY"));
+            console.log(chalk.green("✅ CONNECTED TO WHATSAPP"));
         }
 
         if (connection === "connecting") {
             console.log(chalk.cyan("🔄 Connecting to WhatsApp..."));
         }
 
-       // REQUEST PAIRING CODE LOGIC
         if (connection === "connecting" && !client.authState.creds.registered) {
             console.log(chalk.yellow(`📢 Requesting pairing code for: ${PHONE_NUMBER}`));
             
-            // INCREASED TO 20 SECONDS
+            // 20-second delay to prevent "Connection Failure"
             setTimeout(async () => {
                 try {
                     let code = await client.requestPairingCode(PHONE_NUMBER);
@@ -69,18 +64,17 @@ async function startHisoka() {
                 } catch (e) {
                     console.log(chalk.red("❌ Pairing error: "), e.message);
                 }
-            }, 20000); // <--- Change this to 20000
-        }
+            }, 20000); 
         }
 
         if (connection === "close") {
-            const shouldRestart = lastDisconnect?.error?.output?.statusCode !== 401;
-            console.log(chalk.red(`⚠️ Connection closed. Reason: ${lastDisconnect?.error?.message}`));
-            if (shouldRestart) {
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            console.log(chalk.red(`⚠️ Connection closed. Reason Code: ${reason}`));
+            
+            // Restart if it wasn't a manual logout
+            if (reason !== 401) {
                 console.log(chalk.yellow("🔄 Restarting bot..."));
                 startHisoka();
-            } else {
-                console.log(chalk.bgRed("❌ Session logged out. Delete 'session' folder and restart."));
             }
         }
     });
@@ -88,11 +82,9 @@ async function startHisoka() {
     client.ev.on("creds.update", saveCreds);
 }
 
-// Start the Bot
 startHisoka();
 
-// Web Server for Koyeb Health Checks
-app.get('/', (req, res) => res.send('Bot Status: Online'));
+app.get('/', (req, res) => res.send('Bot Online'));
 app.listen(port, "0.0.0.0", () => {
-    console.log(chalk.magenta(`📡 Health-check server running on port ${port}`));
+    console.log(chalk.magenta(`📡 Server running on port ${port}`));
 });
