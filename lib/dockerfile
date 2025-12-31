@@ -1,8 +1,0 @@
-
-FROM quay.io/samochu/gss
-RUN git clone https://github.com/SAM-OCHU/GSS-Botwa /root/SAM-OCHU
-WORKDIR /root/samochu/
-RUN npm install npm@latest
-RUN npm install
-EXPOSE 8000
-CMD ["npm", "start"]
