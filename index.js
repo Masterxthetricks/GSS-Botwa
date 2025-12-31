@@ -1,10 +1,11 @@
 require("dotenv").config();
 const {
-    default: goutamConnect,
+    default: makeWASocket,
     useMultiFileAuthState,
     Browsers,
     delay,
-    disconnectReason
+    DisconnectReason,
+    fetchLatestBaileysVersion // Critical for fixing 405
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
@@ -15,71 +16,58 @@ const express = require('express');
 
 const app = express();
 const port = process.env.PORT || 8080;
-
-// --- 1. SESSION CLEANER (FIXES 405 ERROR) ---
 const sessionPath = path.join(__dirname, 'session');
-if (fs.existsSync(sessionPath)) {
-    console.log(chalk.yellow("🧹 Cleaning old session files to prevent 405 loop..."));
-    fs.rmSync(sessionPath, { recursive: true, force: true });
+
+// --- 1. SESSION CLEANER ---
+// If the bot gets stuck in a 405 loop, we clear the folder to force a new QR
+function clearSession() {
+    if (fs.existsSync(sessionPath)) {
+        console.log(chalk.yellow("🧹 Clearing corrupted session to bypass 405..."));
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+    }
 }
 
 async function startBot() {
     console.log(chalk.blue.bold("\n🚀 INITIALIZING GSS-BOTWA..."));
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    
+    // --- 2. GET LATEST WA VERSION ---
+    // This tells WhatsApp we are using the most current web client
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(chalk.cyan(`📡 Using WA Version: ${version.join('.')} (Latest: ${isLatest})`));
 
-    const client = goutamConnect({
+    const client = makeWASocket({
+        version, // Dynamic versioning bypasses 405
         logger: pino({ level: "silent" }),
-        printQRInTerminal: false, // We handle this manually below
-        // Browser identity changed to prevent WhatsApp rejection
-        browser: ["Ubuntu", "Chrome", "20.0.04"], 
+        printQRInTerminal: false,
+        // Using a generic Linux browser signature
+        browser: Browsers.ubuntu('Chrome'), 
         auth: state,
-        patchMessageBeforeSending: (message) => {
-            const requiresPatch = !!(
-                message.buttonsMessage ||
-                message.templateMessage ||
-                message.listMessage
-            );
-            if (requiresPatch) {
-                message = {
-                    viewOnceMessage: {
-                        message: {
-                            messageContextInfo: {
-                                deviceListMetadata: {},
-                                deviceListMetadataVersion: 2,
-                            },
-                            ...message,
-                        },
-                    },
-                };
-            }
-            return message;
-        },
     });
 
-    // --- 2. CONNECTION HANDLER ---
+    // --- 3. CONNECTION HANDLER ---
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
             console.log(chalk.magenta.bold("\n📸 SCAN THE QR CODE BELOW:"));
             qrcode.generate(qr, { small: true });
-            console.log(chalk.cyan("Note: Zoom out (Ctrl -) if the QR looks distorted.\n"));
         }
 
         if (connection === "open") {
-            console.log(chalk.green.bold("\n✅ SUCCESS: BOT IS ONLINE AND CONNECTED"));
+            console.log(chalk.green.bold("\n✅ SUCCESS: BOT IS ONLINE"));
         }
 
         if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection closed. Reason Code: ${reason}`));
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            console.log(chalk.red(`⚠️ Connection closed. Code: ${statusCode}`));
 
-            // If the code is 405 or 401, we need a full restart
-            if (reason === 405 || reason === 401) {
-                console.log(chalk.red("CRITICAL ERROR: Browser rejected. Restarting fresh..."));
-                startBot();
-            } else {
+            if (statusCode === 405 || statusCode === 401) {
+                console.log(chalk.red("CRITICAL: 405 Detected. Resetting session in 5s..."));
+                clearSession();
+                setTimeout(() => startBot(), 5000);
+            } else if (statusCode !== DisconnectReason.loggedOut) {
                 startBot();
             }
         }
@@ -87,29 +75,27 @@ async function startBot() {
 
     client.ev.on("creds.update", saveCreds);
 
-    // --- 3. MESSAGE HANDLER ---
+    // --- 4. MESSAGE HANDLER ---
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             const mek = chatUpdate.messages[0];
-            if (!mek.message) return;
+            if (!mek.message || mek.key.fromMe) return;
             
-            // This links to your bot.js file logic
-            // Ensure bot.js exists in your main folder!
+            // Log incoming message for debugging
+            console.log(chalk.gray(`📩 Message from ${mek.key.remoteJid}`));
+
             if (fs.existsSync('./bot.js')) {
                 require("./bot")(client, mek, chatUpdate);
             }
         } catch (err) {
-            console.log(chalk.red("Error in message handler: "), err);
+            console.log(chalk.red("Error: "), err);
         }
     });
 
     return client;
 }
 
-// --- 4. START & HEALTH CHECK ---
-startBot().catch(err => console.log("Startup Error: ", err));
-
-app.get('/', (req, res) => res.send('Bot is Running!'));
-app.listen(port, "0.0.0.0", () => {
-    console.log(chalk.green(`📡 Health Check Server running on port ${port}`));
-});
+// Start & Health Check
+startBot().catch(err => console.log(err));
+app.get('/', (req, res) => res.send('GSS-Bot is Active'));
+app.listen(port, "0.0.0.0");
