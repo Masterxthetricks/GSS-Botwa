@@ -28,9 +28,9 @@ async function startBot() {
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
         printQRInTerminal: false, // We handle this manually for Koyeb
-        browser: Browsers.macOS('Desktop'),
+       browser: Browsers.ubuntu('Chrome'), 
         auth: state
-    });
+     });
 
     // 2. CONNECTION HANDLER
     client.ev.on("connection.update", async (update) => {
