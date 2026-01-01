@@ -12,7 +12,6 @@ const fs = require("fs");
 const path = require('path');
 const chalk = require("chalk");
 const pino = require("pino");
-const os = require('os');
 const express = require('express');
 const axios = require('axios');
 const moment = require("moment-timezone");
@@ -25,9 +24,11 @@ if (!fs.existsSync(sessionPath)) {
     fs.mkdirSync(sessionPath, { recursive: true }); 
 }
 
-// 🔒 HARDCODED PAIRING & OWNER LOGIC
+// 🔒 HARDCODED CONFIGURATION
 const PAIRING_NUMBER = "212701458617"; 
 global.owner = ["212701458617", "85182757527702"]; 
+const botName = "GSS-BETA";
+const ownerName = "AYANOKOBOT";
 
 global.db = {
     antilink: false, antibot: false, antiwame: false, antitagall: false,
@@ -36,9 +37,6 @@ global.db = {
 };
 
 const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "masisi", "bouzen", "langet manman w", "santi kk", "gyet manman w", "pouri", "bouda fon", "trip pouri", "koko santi", "kalanbe"];
-const botName = "GSS-BETA";
-const ownerName = "AYANOKOBOT";
-
 let badWordStrikes = {}; 
 let warnings = {};
 let blacklist = [];
@@ -53,25 +51,31 @@ async function startHisoka() {
     
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        browser: ["Mac OS", "Chrome", "10.15.7"], 
+        // 🛠️ FIXED BROWSER STRING FOR VALID PAIRING
+        browser: ["Ubuntu", "Chrome", "20.0.04"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         version,
         syncFullHistory: false,
-        markOnlineOnConnect: true
+        markOnlineOnConnect: true,
+        printQRInTerminal: false,
+        mobile: false
     });
+
+    // 📲 PAIRING LOGIC
+    if (!client.authState.creds.registered) {
+        await delay(5000); 
+        let code = await client.requestPairingCode(PAIRING_NUMBER);
+        console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE FOR ${PAIRING_NUMBER}: ${code} \n`));
+    }
 
     client.ev.on("messages.update", async (chatUpdate) => {
         if (!global.db.antidelete) return;
         for (const { key, update } of chatUpdate) {
             if (update.protocolMessage?.type === 0) {
-                deletedMessages[key.remoteJid] = {
-                    key: key,
-                    participant: key.participant,
-                    message: update.protocolMessage
-                };
+                deletedMessages[key.remoteJid] = { key, participant: key.participant, message: update.protocolMessage };
             }
         }
     });
@@ -82,14 +86,6 @@ async function startHisoka() {
             if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startHisoka();
         } else if (connection === "open") {
             console.log(chalk.green.bold("✅ GSS-BETA ONLINE"));
-        }
-        // 📲 FORCED PAIRING TO HARDCODED NUMBER
-        if (!client.authState.creds.registered && !update.qr) {
-            await delay(20000); 
-            try {
-                const code = await client.requestPairingCode(PAIRING_NUMBER);
-                console.log(chalk.black.bgMagenta(`\n 📲 PAIRING CODE FOR ${PAIRING_NUMBER}: ${code} \n`));
-            } catch { console.log("Pairing error..."); }
         }
     });
 
@@ -102,22 +98,17 @@ async function startHisoka() {
 
             const from = mek.key.remoteJid;
             const sender = mek.key.participant || from;
-            
-            // 🛡️ STRICT OWNER VALIDATION
             const senderNumber = sender.replace(/[^0-9]/g, '');
             const isOwner = global.owner.includes(senderNumber);
-            
             const isGroup = from.endsWith('@g.us');
             const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
             const lowerBody = body.toLowerCase();
             const reply = (text) => client.sendMessage(from, { text }, { quoted: mek });
 
-            // 🚫 BLACKLIST (Auto-remove)
             if (blacklist.includes(senderNumber) && !isOwner) {
                 return await client.groupParticipantsUpdate(from, [sender], "remove");
             }
 
-            // 🛡️ ANTI-BADWORD (3-Strike System)
             if (isGroup && global.db.antibadword && !isOwner) {
                 if (badWords.some(word => lowerBody.includes(word))) {
                     await client.sendMessage(from, { delete: mek.key });
@@ -127,22 +118,19 @@ async function startHisoka() {
                             reply("🚫 Auto-Kick: 3 strikes reached.");
                             await client.groupParticipantsUpdate(from, [sender], "remove");
                             delete badWordStrikes[senderNumber];
-                        } else {
-                            reply(`⚠️ Warning @${senderNumber} [${badWordStrikes[senderNumber]}/3]`);
-                        }
+                        } else { reply(`⚠️ Warning @${senderNumber} [${badWordStrikes[senderNumber]}/3]`); }
                     }
                     return;
                 }
             }
 
             if (!body.startsWith(".")) return;
+            if (!isOwner && !lowerBody.startsWith(".menu") && !lowerBody.startsWith(".owner")) return;
+
             const args = body.slice(1).trim().split(/ +/);
             const command = args.shift().toLowerCase();
             const q = args.join(" ");
             const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || (q.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
-
-            // 📋 LOGGING
-            console.log(chalk.bgWhite.black(`[ COMMAND ]`), chalk.green(command), "by", senderNumber);
 
             switch (command) {
                 case 'menu':
@@ -195,10 +183,8 @@ async function startHisoka() {
                     break;
 
                 case 'owner': reply(isOwner ? "✅ Status: Recognized Master." : "❌ Status: Unknown User."); break;
-
-                // 🔐 ALL ADMINISTRATIVE COMMANDS - OWNER ONLY
+                
                 case 'kickall':
-                    if (!isOwner) return reply("❌ Owner Only.");
                     if (q === 'confirm') {
                         const meta = await client.groupMetadata(from);
                         const targets = meta.participants.filter(p => !global.owner.includes(p.id.replace(/[^0-9]/g, '')) && !p.admin);
@@ -208,18 +194,16 @@ async function startHisoka() {
                     break;
 
                 case 'warn':
-                    if (!isOwner) return;
                     warnings[mentioned] = (warnings[mentioned] || 0) + 1;
                     if (warnings[mentioned] >= 3) {
                         await client.groupParticipantsUpdate(from, [mentioned], "remove");
                         delete warnings[mentioned];
-                        reply("🚫 Max warnings reached. Removed.");
+                        reply("🚫 Removed.");
                     } else { reply(`⚠️ Warning @${mentioned.split('@')[0]} [${warnings[mentioned]}/3]`); }
                     break;
 
                 case 'blacklist':
-                    if (!isOwner) return;
-                    if (args[0] === 'add') { blacklist.push(mentioned.replace(/[^0-9]/g, '')); reply("🚫 Added to Blacklist."); }
+                    if (args[0] === 'add') { blacklist.push(mentioned.replace(/[^0-9]/g, '')); reply("🚫 Added."); }
                     else if (args[0] === 'del') { blacklist = blacklist.filter(u => u !== mentioned.replace(/[^0-9]/g, '')); reply("✅ Removed."); }
                     break;
 
@@ -232,20 +216,17 @@ async function startHisoka() {
                 case 'antispam':
                 case 'antifake':
                 case 'antidelete':
-                    if (!isOwner) return;
                     global.db[command] = q === 'on';
                     reply(`🛡️ ${command.toUpperCase()} -> ${q.toUpperCase()}`);
                     break;
 
-                case 'ping': if (isOwner) reply("⚡ Online."); break;
-                case 'promote':
-                case 'demote':
-                case 'kick':
-                case 'add':
-                case 'mute':
-                case 'unmute':
-                    if (!isOwner) return;
-                    // Logic for these is the same as previous builds
+                case 'ping': reply("⚡ Online."); break;
+                case 'bc':
+                case 'broadcast':
+                    if (!q) return reply("Text required.");
+                    const groups = Object.keys(await client.groupFetchAllParticipating());
+                    for (let i of groups) { await client.sendMessage(i, { text: `📢 *BROADCAST*\n\n${q}` }); }
+                    reply(`✅ Sent to ${groups.length} groups.`);
                     break;
             }
         } catch (e) { console.error(e); }
