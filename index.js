@@ -2,9 +2,10 @@ require("dotenv").config();
 const { 
     default: goutamConnect, 
     useMultiFileAuthState, 
-    delay, 
     fetchLatestBaileysVersion, 
-    downloadContentFromMessage 
+    downloadContentFromMessage,
+    makeInMemoryStore,
+    jidDecode
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
@@ -14,11 +15,14 @@ const pino = require("pino");
 const os = require('os');
 const express = require('express');
 
+// Manual delay helper to prevent crashes
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
-// 📝 CONFIGURATION & DATABASE (INTEGRATED)
+// 📝 CONFIGURATION & DATABASE
 global.owner = ["212701458617", "85182757527702"]; 
 global.deletedMessages = {}; 
 global.db = {
@@ -54,16 +58,20 @@ async function startHisoka() {
         version,
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
+        // Standard Chrome browser to avoid being flagged as a bot by WA
         browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
         auth: state
     });
 
+    // 🔑 PAIRING CODE LOGIC
     if (!client.authState.creds.registered) {
         await delay(5000); 
         try {
+            // Ensure the pairing number has NO + or spaces
             const code = await client.requestPairingCode("212701458617");
-            console.log(chalk.black.bgMagenta(`\n\n 📲 PAIRING CODE: ${code} \n\n`));
+            console.log(chalk.black.bgMagenta(`\n\n 📲 YOUR PAIRING CODE: ${code} \n\n`));
         } catch (err) { 
+            console.error("Pairing Error:", err);
             setTimeout(() => { startHisoka(); }, 10000);
             return;
         }
@@ -77,7 +85,7 @@ async function startHisoka() {
             if (!mek.message) return;
             const from = mek.key.remoteJid;
 
-            // 🕵️ ANTI-DELETE CACHING
+            // 🕵️ ANTI-DELETE CACHING (Saves to Memory)
             if (!global.deletedMessages[from]) global.deletedMessages[from] = [];
             global.deletedMessages[from].push(mek);
             if (global.deletedMessages[from].length > 50) global.deletedMessages[from].shift();
@@ -96,14 +104,17 @@ async function startHisoka() {
 
             // 🛡️ PASSIVE SECURITY LOGIC
             if (!isOwner && from.endsWith('@g.us')) {
+                // Anti-Badword
                 if (global.db.antibadword && badWords.some(word => body.toLowerCase().includes(word))) {
                     await client.sendMessage(from, { delete: mek.key });
                 }
-                if (global.db.antilink && (body.includes("chat.whatsapp.com") || body.includes("wa.me/"))) {
+                // Anti-Link & Anti-WaMe
+                if (global.db.antilink && (body.includes("chat.whatsapp.com") || (global.db.antiwame && body.includes("wa.me/")))) {
                     await client.sendMessage(from, { delete: mek.key });
                     await client.groupParticipantsUpdate(from, [sender], "remove");
                 }
-                if (global.db.antibot && mek.key.id.startsWith('BAE5') && mek.key.id.length === 16) {
+                // Anti-Bot (detects BAES/Web/Unofficial prefixes)
+                if (global.db.antibot && (mek.key.id.startsWith('BAE5') || mek.key.id.length < 15)) {
                    await client.groupParticipantsUpdate(from, [sender], "remove");
                 }
             }
@@ -166,7 +177,6 @@ async function startHisoka() {
                     await client.sendMessage(from, { forward: lastMsg }, { quoted: mek });
                     break;
 
-                // 👑 ELITE OWNER ONLY COMMANDS
                 case 'add': case 'kick': case 'promote': case 'demote': case 'mute': 
                 case 'unmute': case 'kickall': case 'antilink': case 'antibot': 
                 case 'antiwame': case 'antitagall': case 'antibadword': case 'settings':
@@ -180,11 +190,6 @@ async function startHisoka() {
                         if (!isBotAdmin) return reply("❌ Admin Required.");
                         await client.groupSettingUpdate(from, 'not_announcement');
                         reply("🔓 Group Opened.");
-                    } else if (command === 'add') {
-                        if (!isBotAdmin) return reply("❌ Admin Required.");
-                        let t = q.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                        await client.groupParticipantsUpdate(from, [t], "add");
-                        reply("✅ Added.");
                     } else if (command === 'settings') {
                         let status = `⚙️ *ELITE SYSTEM STATUS*\n\n`;
                         for (let key in global.db) { 
@@ -194,10 +199,10 @@ async function startHisoka() {
                     } else if (global.db.hasOwnProperty(command)) {
                         global.db[command] = q.toLowerCase() === 'on';
                         reply(`🛡️ ${command.toUpperCase()}: ${global.db[command] ? 'ON' : 'OFF'}`);
-                    } else if (['kick', 'promote', 'demote'].includes(command)) {
+                    } else if (['add', 'kick', 'promote', 'demote'].includes(command)) {
                         if (!isBotAdmin) return reply("❌ Admin Required.");
                         let t = mek.message.extendedTextMessage?.contextInfo?.mentionedJid[0] || (q.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
-                        await client.groupParticipantsUpdate(from, [t], command === 'kick' ? 'remove' : command);
+                        await client.groupParticipantsUpdate(from, [t], command === 'kick' ? 'remove' : command === 'add' ? 'add' : command);
                         reply(`✅ ${command} done.`);
                     }
                     break;
@@ -208,4 +213,5 @@ async function startHisoka() {
         } catch (e) { console.error(e); }
     });
 }
+
 startHisoka().catch(e => console.log(e));
