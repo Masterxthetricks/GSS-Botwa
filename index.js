@@ -45,16 +45,22 @@ let isPairing = false;
 
 async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        browser: ["Chrome (Linux)", "GSS-BETA", "1.0.0"],
+        // 🛠️ CLOUD BYPASS: High-compatibility browser signature
+        browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
-        connectTimeoutMs: 180000, 
-        keepAliveIntervalMs: 30000,
-        printQRInTerminal: false
+        // 🛠️ TIMING TWEAKS: Prevent 405 and Handshake drops
+        connectTimeoutMs: 120000, 
+        keepAliveIntervalMs: 25000,
+        emitOwnEvents: true,
+        printQRInTerminal: false,
+        syncFullHistory: false,
+        markOnlineOnConnect: true
     });
 
     // 📲 CONNECTION HANDLER
@@ -63,27 +69,30 @@ async function startHisoka() {
 
         if (connection === "close") {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection Closed (${statusCode}). Retrying in 10s...`));
+            const shouldRestart = statusCode !== DisconnectReason.loggedOut;
+            console.log(chalk.red(`⚠️ Connection Drop (${statusCode}). Restarting: ${shouldRestart}`));
             isPairing = false;
-            setTimeout(() => startHisoka(), 10000); 
+            if (shouldRestart) {
+                setTimeout(() => startHisoka(), 15000); 
+            }
         } else if (connection === "open") {
-            console.log(chalk.green.bold("\n✅ GSS-BETA LINKED\n"));
+            console.log(chalk.green.bold("\n✅ GSS-BETA LINKED SUCCESSFULLY\n"));
             isPairing = false; 
             await client.sendMessage(pairingNumber + "@s.whatsapp.net", { text: "🚀 *AYANOKOJI SYSTEM ONLINE*" });
         }
 
         if (!client.authState.creds.registered && !isPairing) {
             isPairing = true;
-            console.log(chalk.blue(`⏳ Using Number: ${pairingNumber}`));
-            console.log(chalk.yellow("⏳ Waiting 25s for stable network..."));
-            await delay(25000); 
+            console.log(chalk.blue(`⏳ Targeting Number: ${pairingNumber}`));
+            console.log(chalk.yellow("⏳ Network Stabilization (30s)..."));
+            await delay(30000); 
 
             try {
-                console.log(chalk.magenta("📲 Requesting Code..."));
+                console.log(chalk.magenta("📲 Generating pairing code..."));
                 const code = await client.requestPairingCode(pairingNumber);
-                console.log(chalk.black.bgMagenta(`\n\n 📲 YOUR PAIRING CODE: ${code} \n\n`));
+                console.log(chalk.black.bgMagenta(`\n\n 📲 CODE: ${code} \n\n`));
             } catch (err) {
-                console.log(chalk.red("❌ Pairing Error. The network might be unstable."));
+                console.log(chalk.red("❌ Handshake Rejected. Retrying in next cycle..."));
                 isPairing = false; 
             }
         }
@@ -103,7 +112,7 @@ async function startHisoka() {
             const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
             const lowerBody = body.toLowerCase();
 
-            // 🛡️ Auto-Shield logic
+            // 🛡️ Auto-Shield (Anti-Badword)
             if (isGroup && global.db.antibadword && !isOwner) {
                 if (badWords.some(word => lowerBody.includes(word))) {
                     return await client.sendMessage(from, { delete: mek.key });
@@ -158,7 +167,6 @@ async function startHisoka() {
                     break;
 
                 case 'ping': reply("⚡ Online"); break;
-                
                 case 'status': reply(`📊 RAM: ${(os.freemem()/1024/1024).toFixed(2)}MB Free`); break;
 
                 case 'vv': case 'quoted':
