@@ -20,100 +20,76 @@ const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
-// 🛡️ SESSION CLEANUP
-if (fs.existsSync(sessionPath)) { 
-    fs.rmSync(sessionPath, { recursive: true, force: true }); 
+if (!fs.existsSync(sessionPath)) { 
+    fs.mkdirSync(sessionPath, { recursive: true }); 
 }
-fs.mkdirSync(sessionPath);
 
 // 📝 CONFIGURATION
-const pairingNumber = process.env.PAIRING_NUMBER || "212701458617";
-global.owner = [pairingNumber, "85182757527702"]; 
+const PAIRING_NUMBER = "212701458617"; 
+global.owner = [PAIRING_NUMBER, "85182757527702"]; 
 global.db = {
     antilink: false, antibot: false, antiwame: false, antitagall: false,
-    antibadword: false, antispam: false, antiban: true, warns: {},
-    blacklist: [], tagCounts: {}, badWordCounts: {}
+    antibadword: false, antispam: false, antiban: true
 };
 
 const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "masisi", "bouzen", "langet manman w", "santi kk", "gyet manman w", "pouri", "bouda fon", "trip pouri", "koko santi", "kalanbe"];
 const botName = "GSS-BETA";
 const ownerName = "AYANOKOBOT";
+let kickallSafety = {}; 
 
-app.get('/', (req, res) => res.send('GSS-BETA Status: Active'));
+app.get('/', (req, res) => res.status(200).send('GSS-BETA Status: Active'));
 app.listen(port, "0.0.0.0");
-
-let isPairing = false;
 
 async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
     
-    // 🛠️ FETCH LATEST WA VERSION (Bypasses 405 Handshake rejection)
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(chalk.cyan(`🌐 WA Version: ${version.join('.')} (Latest: ${isLatest})`));
-
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        // 🛠️ MOBILE MASK: Bypass cloud IP blacklists
-        browser: ["Chrome (Android)", "Android", "12.0.0"], 
+        browser: ["Ubuntu", "Chrome", "20.0.04"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         version,
-        connectTimeoutMs: 60000, 
-        keepAliveIntervalMs: 25000,
+        connectTimeoutMs: 60000,
         printQRInTerminal: false,
         markOnlineOnConnect: true
     });
 
-    // 📲 CONNECTION HANDLER
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
-
         if (connection === "close") {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection Error: ${statusCode}. Retrying...`));
-            isPairing = false;
-            // Cooldown for 405 error
-            const cooldown = statusCode === 405 ? 25000 : 10000;
-            setTimeout(() => startHisoka(), cooldown); 
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startHisoka();
         } else if (connection === "open") {
-            console.log(chalk.green.bold("\n✅ GSS-BETA LINKED SUCCESSFULLY\n"));
-            isPairing = false; 
-            await client.sendMessage(pairingNumber + "@s.whatsapp.net", { text: "🚀 *AYANOKOJI SYSTEM ONLINE*" });
+            console.log(chalk.green.bold("✅ GSS-BETA ONLINE"));
+            await client.sendMessage(PAIRING_NUMBER + "@s.whatsapp.net", { text: "🚀 *MASTER BUILD DEPLOYED: ALL SYSTEMS ACTIVE*" });
         }
 
-        if (!client.authState.creds.registered && !isPairing) {
-            isPairing = true;
-            console.log(chalk.blue(`⏳ Mode: Pairing Code | Number: ${pairingNumber}`));
+        if (!client.authState.creds.registered && !update.qr) {
             await delay(15000); 
-
             try {
-                console.log(chalk.magenta("📲 Generating Code (Mobile Mask)..."));
-                const code = await client.requestPairingCode(pairingNumber);
-                console.log(chalk.black.bgMagenta(`\n\n 📲 YOUR PAIRING CODE: ${code} \n\n`));
-            } catch (err) {
-                console.log(chalk.red("❌ Handshake Rejected. Re-attempting..."));
-                isPairing = false; 
-            }
+                const code = await client.requestPairingCode(PAIRING_NUMBER);
+                console.log(chalk.black.bgMagenta(`\n 📲 YOUR PAIRING CODE: ${code} \n`));
+            } catch { console.log("Pairing request failed, retrying..."); }
         }
     });
 
     client.ev.on("creds.update", saveCreds);
 
-    // 📩 MESSAGE HANDLER
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             const mek = chatUpdate.messages[0];
             if (!mek.message || mek.key.fromMe) return;
+
             const from = mek.key.remoteJid;
             const sender = mek.key.participant || from;
-            const isOwner = global.owner.includes(sender.split('@')[0]);
+            const isOwner = global.owner.some(num => sender.includes(num));
             const isGroup = from.endsWith('@g.us');
             const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
             const lowerBody = body.toLowerCase();
 
-            // 🛡️ Bad Word Shield
+            // 🛡️ ANTI-BADWORD LOGIC
             if (isGroup && global.db.antibadword && !isOwner) {
                 if (badWords.some(word => lowerBody.includes(word))) {
                     return await client.sendMessage(from, { delete: mek.key });
@@ -136,120 +112,103 @@ async function startHisoka() {
                     const h = Math.floor(uptime / 3600), m = Math.floor((uptime % 3600) / 60), s = Math.floor(uptime % 60);
                     let menuMsg = `┏━━━〔 *${botName}* 〕━━━┓
 ┃ Master: ${ownerName}
+┃ Uptime: ${h}h ${m}m ${s}s
 ┗━━━━━━━━━━━━━━┛
-
-┏━━━━━━━━━━━━━━┓
-┃ 🌅 *Ayanokoji System* 🌇
-┗━━━━━━━━━━━━━━┛
-
-┏━━━〔 *Bot Info* 〕━━━┓
-┃ *Uptime :* ${h}h ${m}m ${s}s
-┃ *Status :* ${global.db.antilink ? '✅ Protected' : '❌ Vulnerable'}
-┗━━━━━━━━━━━━━━┛
-
-┏━━━〔 *User Info* 〕━━━┓
-┃ *Name :* ${mek.pushName || "User"}
-┃ *Rank :* ${isOwner ? "Elite Owner" : "Student"}
-┗━━━━━━━━━━━━━━┛
-
 ┏━━━〔 *Commands* 〕━━━┓
-┃ .vv | .quoted | .status | .ping 
-┃ .ai | .hidetag | .tagall 
-┃ .kickall | .promote | .demote 
-┃ .kick | .mute | .unmute | .add
-┃ .antibadword on/off
+┃ .ping | .status | .ai
+┃ .hidetag | .tagall | .kick
+┃ .promote | .demote | .add
+┃ .mute | .unmute | .vv | .quoted
 ┃ .antilink on/off
-┃ .settings
+┃ .antibadword on/off
+┃ .antitagall on/off
+┃ .kickall | .settings
 ┗━━━━━━━━━━━━━━┛`;
-                    client.sendMessage(from, { 
-                        video: { url: "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3h6Z3RyejR6Z3RyejR6Z3RyejR6Z3RyejR6Z3RyejR6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/vA07zct9tyTLO/giphy.gif" }, 
-                        caption: menuMsg, gifPlayback: true 
-                    }, { quoted: mek });
-                    break;
-
-                case 'ping': reply("⚡ Status: Active"); break;
-                case 'status': reply(`📊 RAM: ${(os.freemem()/1024/1024).toFixed(2)}MB Free`); break;
-
-                case 'vv': case 'quoted':
-                    const qmsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
-                    const vo = qmsg?.viewOnceMessageV2 || qmsg?.viewOnceMessage;
-                    if (vo) {
-                        const type = Object.keys(vo.message)[0];
-                        const stream = await downloadContentFromMessage(vo.message[type], type === 'imageMessage' ? 'image' : 'video');
-                        let buffer = Buffer.from([]);
-                        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                        client.sendMessage(from, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "✅ Decrypted" }, { quoted: mek });
-                    }
-                    break;
-
-                case 'ai':
-                    if (!q) return reply("How can I assist you?");
-                    try {
-                        const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                        reply(`🤖 *Gemini:* ${res.data.success}`);
-                    } catch { reply("AI system is currently overloaded."); }
-                    break;
-
-                case 'hidetag':
-                    if (!isOwner || !isGroup) return;
-                    const gMeta = await client.groupMetadata(from);
-                    client.sendMessage(from, { text: q, mentions: gMeta.participants.map(a => a.id) });
-                    break;
-
-                case 'tagall':
-                    if (!isOwner || !isGroup) return;
-                    const tagMeta = await client.groupMetadata(from);
-                    let tagTxt = "📣 *Announcement*\n\n" + q + "\n\n";
-                    for (let mem of tagMeta.participants) tagTxt += "@" + mem.id.split('@')[0] + " ";
-                    client.sendMessage(from, { text: tagTxt, mentions: tagMeta.participants.map(a => a.id) });
-                    break;
-
-                case 'kickall':
-                    if (!isOwner || !isGroup) return;
-                    const kickMeta = await client.groupMetadata(from);
-                    for (let mem of kickMeta.participants) {
-                        if (mem.id !== client.user.id && !global.owner.includes(mem.id.split('@')[0])) {
-                            await client.groupParticipantsUpdate(from, [mem.id], "remove");
-                        }
-                    }
-                    break;
-
-                case 'promote': case 'demote':
-                    if (!isOwner || !isGroup) return;
-                    await client.groupParticipantsUpdate(from, [mentioned], command);
-                    reply("✅ Student rank updated.");
-                    break;
-
-                case 'kick':
-                    if (!isOwner || !isGroup) return;
-                    await client.groupParticipantsUpdate(from, [mentioned], "remove");
-                    break;
-
-                case 'mute': case 'unmute':
-                    if (!isOwner || !isGroup) return;
-                    await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
-                    reply(command === 'mute' ? "🔒 Group Muted" : "🔓 Group Unmuted");
-                    break;
-
-                case 'add':
-                    if (!isOwner || !isGroup) return;
-                    await client.groupParticipantsUpdate(from, [q.replace(/[^0-9]/g, '') + '@s.whatsapp.net'], "add");
-                    break;
-
-                case 'antilink': case 'antibadword':
-                    if (!isOwner) return;
-                    global.db[command] = args[0] === 'on';
-                    reply(`🛡️ ${command.toUpperCase()} is now ${global.db[command] ? 'ENABLED' : 'DISABLED'}`);
+                    reply(menuMsg);
                     break;
 
                 case 'settings':
                     if (!isOwner) return;
-                    let setTxt = "⚙️ *SYSTEM CONFIG*\n\n";
-                    for (let key in global.db) if (typeof global.db[key] === 'boolean') setTxt += `• ${key.toUpperCase()}: ${global.db[key] ? '✅' : '❌'}\n`;
-                    reply(setTxt);
+                    let setText = `⚙️ *SYSTEM SETTINGS*\n\n`;
+                    for (let key in global.db) setText += `➤ ${key.toUpperCase()}: ${global.db[key] ? '✅' : '❌'}\n`;
+                    reply(setText);
+                    break;
+
+                case 'kickall':
+                    if (!isOwner || !isGroup) return reply("❌ Master Only.");
+                    if (q === 'confirm') {
+                        reply("⚠️ *CLEANING GROUP IN 3 SECONDS...*");
+                        const groupMeta = await client.groupMetadata(from);
+                        const participants = groupMeta.participants.filter(p => !global.owner.some(o => p.id.includes(o)) && !p.admin);
+                        for (let mem of participants) {
+                            await client.groupParticipantsUpdate(from, [mem.id], "remove");
+                            await delay(1000); 
+                        }
+                        reply("✅ Group cleaning complete.");
+                        delete kickallSafety[from];
+                    } else {
+                        kickallSafety[from] = true;
+                        reply("🛑 *WARNING:* You are about to kick everyone. Type `.kickall confirm` within 30s to proceed.");
+                        setTimeout(() => delete kickallSafety[from], 30000);
+                    }
+                    break;
+
+                case 'promote':
+                case 'demote':
+                    if (!isOwner || !isGroup) return reply("❌ Master Only.");
+                    reply(`🔄 Executing ${command}...`);
+                    await client.groupParticipantsUpdate(from, [mentioned], command);
+                    break;
+
+                case 'mute':
+                case 'unmute':
+                    if (!isOwner || !isGroup) return reply("❌ Master Only.");
+                    await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
+                    reply(`✅ Group is now ${command}d.`);
+                    break;
+
+                case 'kick':
+                case 'add':
+                    if (!isOwner || !isGroup) return;
+                    reply(`🔄 Processing ${command}...`);
+                    await client.groupParticipantsUpdate(from, [mentioned], command === 'add' ? "add" : "remove");
+                    break;
+
+                case 'vv':
+                case 'quoted':
+                    const qmsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
+                    const vo = qmsg?.viewOnceMessageV2?.message || qmsg?.viewOnceMessage?.message;
+                    if (!vo) return reply("⚠️ Quote a View-Once message.");
+                    const type = Object.keys(vo)[0];
+                    const stream = await downloadContentFromMessage(vo[type], type === 'imageMessage' ? 'image' : 'video');
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    client.sendMessage(from, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "✅ Decrypted" }, { quoted: mek });
+                    break;
+
+                case 'antilink':
+                case 'antibadword':
+                case 'antitagall':
+                    if (!isOwner) return;
+                    global.db[command] = args[0] === 'on';
+                    reply(`🛡️ ${command.toUpperCase()} set to ${args[0].toUpperCase()}`);
+                    break;
+
+                case 'ping': reply("⚡ Status: Active"); break;
+
+                case 'status':
+                    reply(`📊 *System Status*\nOS: ${os.platform()}\nRAM: ${Math.round(os.freemem()/1024/1024)}MB Free\nUptime: ${Math.round(process.uptime())}s`);
+                    break;
+
+                case 'ai':
+                    if (!q) return;
+                    try {
+                        const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
+                        reply(`🤖: ${res.data.success}`);
+                    } catch { reply("⚠️ AI Error."); }
                     break;
             }
-        } catch (e) { console.log(e); }
+        } catch (e) { console.error(e); }
     });
 }
 
