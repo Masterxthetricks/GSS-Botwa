@@ -1,17 +1,28 @@
 require("dotenv").config();
+const { 
+    default: goutamConnect, 
+    useMultiFileAuthState, 
+    delay, 
+    fetchLatestBaileysVersion, 
+    downloadContentFromMessage 
+} = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
-const express = require('express');
-const { default: goutamConnect, useMultiFileAuthState, delay, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const axios = require('axios');
 const chalk = require("chalk");
 const pino = require("pino");
+const express = require('express');
 
 const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
+// 📝 CONFIGURATION
 global.owner = ["212701458617", "85182757527702"]; 
 global.antilink = false;
+global.deletedMessages = {}; 
+const botName = "GSS-BETA";
+const ownerName = "AYANOKOBOT";
 
 if (!global.serverStarted) {
     app.get('/', (req, res) => res.send('Bot Online'));
@@ -20,10 +31,6 @@ if (!global.serverStarted) {
 }
 
 async function startHisoka() {
-    const credsPath = path.join(sessionPath, 'creds.json');
-    if (fs.existsSync(sessionPath) && !fs.existsSync(credsPath)) {
-        fs.rmSync(sessionPath, { recursive: true, force: true });
-    }
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -39,14 +46,14 @@ async function startHisoka() {
         await delay(15000); 
         try {
             const code = await client.requestPairingCode("212701458617");
-            console.log(chalk.magenta(`\n CODE: ${code} \n`));
+            console.log(chalk.magenta(`\n PAIRING CODE: ${code} \n`));
         } catch { startHisoka(); }
     }
 
     client.ev.on("creds.update", saveCreds);
     client.ev.on("connection.update", async (up) => {
         const { connection, lastDisconnect } = up; 
-        if (connection === "open") console.log(chalk.green("✅ SUCCESS"));
+        if (connection === "open") console.log(chalk.green("✅ CONNECTED"));
         if (connection === "close") {
             const code = lastDisconnect?.error?.output?.statusCode;
             if (code !== 401) { await delay(10000); startHisoka(); }
@@ -54,23 +61,25 @@ async function startHisoka() {
     });
 
     client.ev.on("messages.upsert", async (chatUpdate) => {
+        const mek = chatUpdate.messages[0];
+        if (!mek.message) return;
+        const from = mek.key.remoteJid;
+        if (!global.deletedMessages[from]) global.deletedMessages[from] = [];
+        global.deletedMessages[from].push(mek);
+        if (global.deletedMessages[from].length > 50) global.deletedMessages[from].shift(); 
+    });
+
+    client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             const mek = chatUpdate.messages[0];
             if (!mek.message || mek.key.fromMe) return;
+
             const from = mek.key.remoteJid;
             const isGroup = from.endsWith('@g.us');
-            const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || "").trim();
+            const type = Object.keys(mek.message)[0];
+            const body = (type === 'conversation') ? mek.message.conversation : (type === 'extendedTextMessage') ? mek.message.extendedTextMessage.text : (type === 'imageMessage') ? mek.message.imageMessage.caption : (type === 'videoMessage') ? mek.message.videoMessage.caption : '';
             const sender = mek.key.participant || mek.key.remoteJid;
             const isOwner = global.owner.some(num => sender.includes(num));
-
-            console.log(chalk.blue(`[LOG] From: ${sender} | Msg: ${body}`));
-
-            if (isGroup && global.antilink && body.includes("chat.whatsapp.com") && !isOwner) {
-                const groupMetadata = await client.groupMetadata(from);
-                const botNumber = client.user.id.split(':')[0] + '@s.whatsapp.net';
-                const isBotAdmin = groupMetadata.participants.find(u => u.id === botNumber)?.admin;
-                if (isBotAdmin) return await client.groupParticipantsUpdate(from, [sender], "remove");
-            }
 
             if (!body.startsWith(".")) return;
             const command = body.slice(1).trim().split(/ +/).shift().toLowerCase();
@@ -81,35 +90,113 @@ async function startHisoka() {
             const participants = isGroup ? groupMetadata.participants : [];
             const botNumber = client.user.id.split(':')[0] + '@s.whatsapp.net';
             const isBotAdmin = isGroup ? participants.find(u => u.id === botNumber)?.admin : false;
+            const quoted = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
 
             switch (command) {
                 case 'menu':
-                    await client.sendMessage(from, { text: "*BOT MENU*\n\n.tagall\n.kickall\n.mute\n.unmute\n.antilink on/off\n.promote\n.demote\n.owner\n.ping" });
+                    const time = new Date().toLocaleTimeString();
+                    const date = new Date().toLocaleDateString();
+                    const uptime = process.uptime();
+                    const hours = Math.floor(uptime / 3600);
+                    const minutes = Math.floor((uptime % 3600) / 60);
+                    const seconds = Math.floor(uptime % 60);
+
+                    let menuMsg = `┏━━━〔 *${botName}* 〕━━━┓
+┃ Hi 👋
+┃ 🤖 *RK BOT*
+┗━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━┓
+┃ 🌅 *System Status* 🌇
+┗━━━━━━━━━━━━━━┛
+
+┏━━━〔 *Bot Info* 〕━━━┓
+┃ *Bot Name :* ${botName}
+┃ *Owner Name :* ${ownerName}
+┃ *Prefix :* .
+┃ *Uptime :* ${hours}h ${minutes}m ${seconds}s
+┃ *Mode :* Public
+┗━━━━━━━━━━━━━━┛
+
+┏━━━〔 *User Info* 〕━━━┓
+┃ *Name :* ${mek.pushName || "User"}
+┃ *Number :* @${sender.split('@')[0]}
+┃ *Rank :* ${isOwner ? "Owner" : "User"}
+┃ *Premium :* ✅
+┗━━━━━━━━━━━━━━┛
+
+┏━━━〔 *Time Info* 〕━━━┓
+┃ *Time :* ${time}
+┃ *Date :* ${date}
+┗━━━━━━━━━━━━━━┛
+
+┏━━━〔 *Owner Manual* 〕━━━┓
+┃ .vv (Reply ViewOnce)
+┃ .quoted (Reply Deleted)
+┃ .kickall | .bc
+┗━━━━━━━━━━━━━━┛
+
+┏━━━〔 *Group Admin* 〕━━━┓
+┃ .add [number] | .kick
+┃ .promote | .demote
+┃ .mute | .unmute
+┃ .tagall | .hidetag
+┃ .antilink on/off
+┗━━━━━━━━━━━━━━┛
+
+┏━━━〔 *Public* 〕━━━┓
+┃ .ping | .owner | .ai
+┗━━━━━━━━━━━━━━┛
+
+*...Read more*`;
+
+                    await client.sendMessage(from, { 
+                        video: { url: "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJueXF4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKMGpxx5J1fP44M/giphy.gif" }, 
+                        caption: menuMsg, gifPlayback: true, mentions: [sender]
+                    }, { quoted: mek });
                     break;
-                case 'ping': await client.sendMessage(from, { text: "Online ⚡" }); break;
-                case 'owner': await client.sendMessage(from, { text: isOwner ? "✅ Boss" : "❌ No" }); break;
+
+                case 'hidetag':
+                    if (!isGroup || !isOwner) return;
+                    client.sendMessage(from, { text: q ? q : "📢 Attention Everyone!", mentions: participants.map(a => a.id) });
+                    break;
+
                 case 'tagall':
                     if (!isGroup || !isOwner) return;
-                    let t = "*📢 TAG ALL*\n\n";
+                    let t = `*📢 ATTENTION ALL*\n\n`;
                     for (let m of participants) { t += ` @${m.id.split('@')[0]}\n`; }
                     await client.sendMessage(from, { text: t, mentions: participants.map(a => a.id) });
                     break;
-                case 'mute':
-                    if (isGroup && isBotAdmin && isOwner) await client.groupSettingUpdate(from, 'announcement');
+
+                case 'vv':
+                    if (!isOwner || !quoted) return;
+                    const vType = Object.keys(quoted)[0];
+                    if (vType === 'viewOnceMessageV2' || vType === 'viewOnceMessage') {
+                        const vo = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
+                        const mType = Object.keys(vo.message)[0];
+                        const stream = await downloadContentFromMessage(vo.message[mType], mType === 'imageMessage' ? 'image' : 'video');
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
+                        await client.sendMessage(from, { [mType === 'imageMessage' ? 'image' : 'video']: buffer, caption: "🔓 Decrypted" }, { quoted: mek });
+                    }
                     break;
-                case 'unmute':
-                    if (isGroup && isBotAdmin && isOwner) await client.groupSettingUpdate(from, 'not_announcement');
+
+                case 'quoted':
+                    if (!isOwner || !quoted) return;
+                    await client.sendMessage(from, { forward: { key: mek.message.extendedTextMessage.contextInfo.quotedMessage ? mek : null, message: quoted } });
                     break;
-                case 'promote':
-                case 'demote':
+
+                case 'add':
                     if (!isGroup || !isBotAdmin || !isOwner) return;
-                    let u = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                    await client.groupParticipantsUpdate(from, u, command);
+                    await client.groupParticipantsUpdate(from, [q.replace(/[^0-9]/g, '') + '@s.whatsapp.net'], "add");
                     break;
-                case 'antilink':
-                    if (isOwner) global.antilink = args[0] === 'on';
-                    await client.sendMessage(from, { text: `Antilink: ${global.antilink}` });
+
+                case 'kick':
+                    if (!isGroup || !isBotAdmin || !isOwner) return;
+                    let target = mek.message.extendedTextMessage?.contextInfo?.mentionedJid[0] || (q.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
+                    await client.groupParticipantsUpdate(from, [target], "remove");
                     break;
+
                 case 'kickall':
                     if (!isGroup || !isBotAdmin || !isOwner) return;
                     const others = participants.filter(v => v.admin === null).map(v => v.id);
@@ -118,6 +205,14 @@ async function startHisoka() {
                         await delay(1500);
                     }
                     break;
+
+                case 'mute':
+                case 'unmute':
+                    if (isGroup && isBotAdmin && isOwner) await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
+                    break;
+
+                case 'ping': await client.sendMessage(from, { text: "⚡ Online" }); break;
+                case 'owner': await client.sendMessage(from, { text: isOwner ? "✅ Authenticated" : "❌ Denied" }); break;
             }
         } catch (e) { console.log(e); }
     });
