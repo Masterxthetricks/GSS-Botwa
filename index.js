@@ -20,6 +20,8 @@ const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
+if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
+
 // 📝 CONFIGURATION & DATABASE
 global.owner = ["212701458617", "85182757527702"]; 
 global.db = {
@@ -31,8 +33,7 @@ global.db = {
 const botName = "GSS-BETA";
 const ownerName = "AYANOKOBOT";
 
-if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
-app.get('/', (req, res) => res.send('GSS-BETA Status: Active'));
+app.get('/', (req, res) => res.send('GSS-BETA Elite Status: Active'));
 app.listen(port, "0.0.0.0");
 
 async function startHisoka() {
@@ -47,7 +48,6 @@ async function startHisoka() {
         connectTimeoutMs: 120000
     });
 
-    // 🔑 PAIRING LOGIC
     if (!client.authState.creds.registered) {
         await delay(10000); 
         try {
@@ -57,12 +57,9 @@ async function startHisoka() {
     }
 
     client.ev.on("creds.update", saveCreds);
-
     client.ev.on("connection.update", async (update) => {
         const { connection } = update;
-        if (connection === "open") {
-            await client.sendMessage("212701458617@s.whatsapp.net", { text: "🚀 *SYSTEM ONLINE*" });
-        }
+        if (connection === "open") await client.sendMessage("212701458617@s.whatsapp.net", { text: "🚀 *SYSTEM FULLY OPERATIONAL*" });
         if (connection === "close") startHisoka();
     });
 
@@ -111,6 +108,7 @@ async function startHisoka() {
 ┃ .vv | .status | .ping | .ai
 ┃ .hidetag | .tagall | .kickall
 ┃ .promote | .demote | .kick
+┃ .mute | .unmute
 ┃ .antibadword on/off
 ┃ .antilink on/off
 ┃ .settings
@@ -121,31 +119,25 @@ async function startHisoka() {
                     }, { quoted: mek });
                     break;
 
-                case 'vv': // View Once Bypass
-                    if (!isOwner) return;
-                    let qmsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
-                    if (qmsg?.viewOnceMessageV2) {
-                        let type = Object.keys(qmsg.viewOnceMessageV2.message)[0];
-                        let media = await downloadContentFromMessage(qmsg.viewOnceMessageV2.message[type], type === 'imageMessage' ? 'image' : 'video');
-                        let buffer = Buffer.from([]);
-                        for await (const chunk of media) buffer = Buffer.concat([buffer, chunk]);
-                        client.sendMessage(from, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "✅ View Once Bypassed" }, { quoted: mek });
-                    }
+                case 'mute':
+                    if (!isOwner || !isGroup) return;
+                    await client.groupSettingUpdate(from, 'announcement');
+                    reply("🔒 *Group Closed:* Only Admins can talk.");
                     break;
 
-                case 'ai':
-                    if (!q) return reply("What is your question?");
-                    const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                    reply(`🤖 *Gemini:* ${res.data.success}`);
+                case 'unmute':
+                    if (!isOwner || !isGroup) return;
+                    await client.groupSettingUpdate(from, 'not_announcement');
+                    reply("🔓 *Group Opened:* Everyone can talk.");
                     break;
 
-                case 'hidetag': // Ghost Mention
+                case 'hidetag':
                     if (!isOwner || !isGroup) return;
                     const groupMetadata = await client.groupMetadata(from);
                     client.sendMessage(from, { text: q ? q : '', mentions: groupMetadata.participants.map(a => a.id) });
                     break;
 
-                case 'tagall': // Visible Mention
+                case 'tagall':
                     if (!isOwner || !isGroup) return;
                     const meta = await client.groupMetadata(from);
                     let txt = `📣 *TAG ALL*\n\n${q}\n\n`;
@@ -169,13 +161,33 @@ async function startHisoka() {
                 case 'promote':
                     if (!isOwner || !isGroup) return;
                     await client.groupParticipantsUpdate(from, [mentioned], "promote");
-                    reply("✅ Promoted.");
+                    reply("✅ User Promoted.");
                     break;
 
                 case 'demote':
                     if (!isOwner || !isGroup) return;
                     await client.groupParticipantsUpdate(from, [mentioned], "demote");
-                    reply("✅ Demoted.");
+                    reply("✅ User Demoted.");
+                    break;
+
+                case 'vv':
+                    if (!isOwner) return;
+                    let qmsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
+                    if (qmsg?.viewOnceMessageV2) {
+                        let type = Object.keys(qmsg.viewOnceMessageV2.message)[0];
+                        let media = await downloadContentFromMessage(qmsg.viewOnceMessageV2.message[type], type === 'imageMessage' ? 'image' : 'video');
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of media) buffer = Buffer.concat([buffer, chunk]);
+                        client.sendMessage(from, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "✅ View Once Bypassed" }, { quoted: mek });
+                    }
+                    break;
+
+                case 'ai':
+                    if (!q) return reply("Ask your question.");
+                    try {
+                        const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
+                        reply(`🤖 *Gemini:* ${res.data.success}`);
+                    } catch { reply("AI offline."); }
                     break;
 
                 case 'antilink':
@@ -193,9 +205,4 @@ async function startHisoka() {
                     break;
 
                 case 'ping': reply("⚡ Status: Active"); break;
-                case 'status': reply(`RAM: ${(os.freemem()/1024/1024).toFixed(2)}MB Free`); break;
-            }
-        } catch (e) { console.error("Error:", e); }
-    });
-}
-start
+                case 'status': reply(`RAM: ${(os
