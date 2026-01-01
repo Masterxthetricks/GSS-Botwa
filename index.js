@@ -3,20 +3,16 @@ const {
     default: goutamConnect, 
     useMultiFileAuthState, 
     fetchLatestBaileysVersion, 
-    downloadContentFromMessage,
-    makeInMemoryStore,
+    delay,
+    DisconnectReason,
     jidDecode
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
-const axios = require('axios');
 const chalk = require("chalk");
 const pino = require("pino");
 const os = require('os');
 const express = require('express');
-
-// Manual delay helper to prevent crashes
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -44,13 +40,21 @@ const botName = "GSS-BETA";
 const ownerName = "AYANOKOBOT";
 
 if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
-if (!global.serverStarted) {
-    app.get('/', (req, res) => res.send('Bot Online'));
-    app.listen(port, "0.0.0.0");
-    global.serverStarted = true;
-}
+
+// Koyeb Health Check
+app.get('/', (req, res) => res.send('GSS-BETA System Online'));
+app.listen(port, "0.0.0.0");
 
 async function startHisoka() {
+    // 🛡️ SESSION CLEANER: Fixes "Stuck on Generating" & "Invalid Code"
+    if (fs.existsSync(path.join(sessionPath, 'creds.json'))) {
+        const creds = JSON.parse(fs.readFileSync(path.join(sessionPath, 'creds.json')));
+        if (!creds.registered && !creds.pairingCode) {
+            console.log(chalk.red("Detected corrupted session. Purging for fresh start..."));
+            fs.unlinkSync(path.join(sessionPath, 'creds.json'));
+        }
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -58,24 +62,41 @@ async function startHisoka() {
         version,
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
-        // Standard Chrome browser to avoid being flagged as a bot by WA
-        browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
-        auth: state
+        mobile: false, // 🚀 FORCE DESKTOP LOGIC (Prevents Spinner)
+        browser: ["GSS-BETA", "Chrome", "1.0.0"], 
+        auth: state,
+        defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000
     });
 
-    // 🔑 PAIRING CODE LOGIC
+    // 🔑 OPTIMIZED PAIRING LOGIC
     if (!client.authState.creds.registered) {
-        await delay(5000); 
+        await delay(8000); 
         try {
-            // Ensure the pairing number has NO + or spaces
-            const code = await client.requestPairingCode("212701458617");
-            console.log(chalk.black.bgMagenta(`\n\n 📲 YOUR PAIRING CODE: ${code} \n\n`));
+            let phoneNumber = "212701458617".replace(/[^0-9]/g, '');
+            const code = await client.requestPairingCode(phoneNumber);
+            console.log(chalk.black.bgCyan(`\n\n 📲 YOUR PAIRING CODE: ${code} \n\n`));
         } catch (err) { 
-            console.error("Pairing Error:", err);
-            setTimeout(() => { startHisoka(); }, 10000);
+            console.error("Pairing Error (Retrying...):", err);
+            setTimeout(() => { startHisoka(); }, 15000);
             return;
         }
     }
+
+    // 🛡️ CONNECTION RECOVERY
+    client.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === "close") {
+            let reason = lastDisconnect?.error?.output?.statusCode;
+            if (reason !== DisconnectReason.loggedOut) {
+                startHisoka();
+            }
+        } else if (connection === "open") {
+            console.log(chalk.green.bold("\n✅ SUCCESS: GSS-BETA IS LINKED!\n"));
+            await client.sendMessage(global.owner[0] + "@s.whatsapp.net", { text: "🚀 *GSS-BETA SYSTEM ONLINE*" });
+        }
+    });
 
     client.ev.on("creds.update", saveCreds);
 
@@ -85,7 +106,6 @@ async function startHisoka() {
             if (!mek.message) return;
             const from = mek.key.remoteJid;
 
-            // 🕵️ ANTI-DELETE CACHING (Saves to Memory)
             if (!global.deletedMessages[from]) global.deletedMessages[from] = [];
             global.deletedMessages[from].push(mek);
             if (global.deletedMessages[from].length > 50) global.deletedMessages[from].shift();
@@ -102,19 +122,16 @@ async function startHisoka() {
                          (type === 'imageMessage') ? mek.message.imageMessage.caption : 
                          (type === 'videoMessage') ? mek.message.videoMessage.caption : '';
 
-            // 🛡️ PASSIVE SECURITY LOGIC
+            // Passive Security
             if (!isOwner && from.endsWith('@g.us')) {
-                // Anti-Badword
                 if (global.db.antibadword && badWords.some(word => body.toLowerCase().includes(word))) {
                     await client.sendMessage(from, { delete: mek.key });
                 }
-                // Anti-Link & Anti-WaMe
                 if (global.db.antilink && (body.includes("chat.whatsapp.com") || (global.db.antiwame && body.includes("wa.me/")))) {
                     await client.sendMessage(from, { delete: mek.key });
                     await client.groupParticipantsUpdate(from, [sender], "remove");
                 }
-                // Anti-Bot (detects BAES/Web/Unofficial prefixes)
-                if (global.db.antibot && (mek.key.id.startsWith('BAE5') || mek.key.id.length < 15)) {
+                if (global.db.antibot && (mek.key.id.startsWith('BAE5') || (mek.key.id.length < 20 && mek.key.id.startsWith('3EB0')))) {
                    await client.groupParticipantsUpdate(from, [sender], "remove");
                 }
             }
@@ -137,6 +154,7 @@ async function startHisoka() {
                     const m = Math.floor((uptime % 3600) / 60);
                     const s = Math.floor(uptime % 60);
 
+                    // 🌅 YOUR RESTORED GSS-BETA MENU 🌇
                     let menuMsg = `┏━━━〔 *${botName}* 〕━━━┓
 ┃ Master: ${ownerName}
 ┗━━━━━━━━━━━━━━┛
@@ -181,7 +199,6 @@ async function startHisoka() {
                 case 'unmute': case 'kickall': case 'antilink': case 'antibot': 
                 case 'antiwame': case 'antitagall': case 'antibadword': case 'settings':
                     if (!isOwner) return reply("❌ Elite Owner Only.");
-
                     if (command === 'mute') {
                         if (!isBotAdmin) return reply("❌ Admin Required.");
                         await client.groupSettingUpdate(from, 'announcement');
