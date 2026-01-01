@@ -5,7 +5,8 @@ const {
     makeCacheableSignalKeyStore, 
     downloadContentFromMessage, 
     delay,
-    DisconnectReason
+    DisconnectReason,
+    fetchLatestBaileysVersion
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
@@ -19,7 +20,7 @@ const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
-// 🛡️ SESSION MANAGEMENT
+// 🛡️ SESSION CLEANUP
 if (fs.existsSync(sessionPath)) { 
     fs.rmSync(sessionPath, { recursive: true, force: true }); 
 }
@@ -46,20 +47,22 @@ let isPairing = false;
 async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     
+    // 🛠️ FETCH LATEST WA VERSION (Bypasses 405 Handshake rejection)
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(chalk.cyan(`🌐 WA Version: ${version.join('.')} (Latest: ${isLatest})`));
+
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        // 🛠️ CLOUD BYPASS: High-compatibility browser signature
-        browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
+        // 🛠️ MOBILE MASK: Bypass cloud IP blacklists
+        browser: ["Chrome (Android)", "Android", "12.0.0"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
-        // 🛠️ TIMING TWEAKS: Prevent 405 and Handshake drops
-        connectTimeoutMs: 120000, 
+        version,
+        connectTimeoutMs: 60000, 
         keepAliveIntervalMs: 25000,
-        emitOwnEvents: true,
         printQRInTerminal: false,
-        syncFullHistory: false,
         markOnlineOnConnect: true
     });
 
@@ -69,12 +72,11 @@ async function startHisoka() {
 
         if (connection === "close") {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldRestart = statusCode !== DisconnectReason.loggedOut;
-            console.log(chalk.red(`⚠️ Connection Drop (${statusCode}). Restarting: ${shouldRestart}`));
+            console.log(chalk.red(`⚠️ Connection Error: ${statusCode}. Retrying...`));
             isPairing = false;
-            if (shouldRestart) {
-                setTimeout(() => startHisoka(), 15000); 
-            }
+            // Cooldown for 405 error
+            const cooldown = statusCode === 405 ? 25000 : 10000;
+            setTimeout(() => startHisoka(), cooldown); 
         } else if (connection === "open") {
             console.log(chalk.green.bold("\n✅ GSS-BETA LINKED SUCCESSFULLY\n"));
             isPairing = false; 
@@ -83,16 +85,15 @@ async function startHisoka() {
 
         if (!client.authState.creds.registered && !isPairing) {
             isPairing = true;
-            console.log(chalk.blue(`⏳ Targeting Number: ${pairingNumber}`));
-            console.log(chalk.yellow("⏳ Network Stabilization (30s)..."));
-            await delay(30000); 
+            console.log(chalk.blue(`⏳ Mode: Pairing Code | Number: ${pairingNumber}`));
+            await delay(15000); 
 
             try {
-                console.log(chalk.magenta("📲 Generating pairing code..."));
+                console.log(chalk.magenta("📲 Generating Code (Mobile Mask)..."));
                 const code = await client.requestPairingCode(pairingNumber);
-                console.log(chalk.black.bgMagenta(`\n\n 📲 CODE: ${code} \n\n`));
+                console.log(chalk.black.bgMagenta(`\n\n 📲 YOUR PAIRING CODE: ${code} \n\n`));
             } catch (err) {
-                console.log(chalk.red("❌ Handshake Rejected. Retrying in next cycle..."));
+                console.log(chalk.red("❌ Handshake Rejected. Re-attempting..."));
                 isPairing = false; 
             }
         }
@@ -112,7 +113,7 @@ async function startHisoka() {
             const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
             const lowerBody = body.toLowerCase();
 
-            // 🛡️ Auto-Shield (Anti-Badword)
+            // 🛡️ Bad Word Shield
             if (isGroup && global.db.antibadword && !isOwner) {
                 if (badWords.some(word => lowerBody.includes(word))) {
                     return await client.sendMessage(from, { delete: mek.key });
@@ -166,7 +167,7 @@ async function startHisoka() {
                     }, { quoted: mek });
                     break;
 
-                case 'ping': reply("⚡ Online"); break;
+                case 'ping': reply("⚡ Status: Active"); break;
                 case 'status': reply(`📊 RAM: ${(os.freemem()/1024/1024).toFixed(2)}MB Free`); break;
 
                 case 'vv': case 'quoted':
@@ -182,11 +183,11 @@ async function startHisoka() {
                     break;
 
                 case 'ai':
-                    if (!q) return reply("What's on your mind?");
+                    if (!q) return reply("How can I assist you?");
                     try {
                         const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                        reply(`🤖 *Ayanokoji:* ${res.data.success}`);
-                    } catch { reply("AI is currently unavailable."); }
+                        reply(`🤖 *Gemini:* ${res.data.success}`);
+                    } catch { reply("AI system is currently overloaded."); }
                     break;
 
                 case 'hidetag':
@@ -198,7 +199,7 @@ async function startHisoka() {
                 case 'tagall':
                     if (!isOwner || !isGroup) return;
                     const tagMeta = await client.groupMetadata(from);
-                    let tagTxt = "📣 *Attention Students*\n\n" + q + "\n\n";
+                    let tagTxt = "📣 *Announcement*\n\n" + q + "\n\n";
                     for (let mem of tagMeta.participants) tagTxt += "@" + mem.id.split('@')[0] + " ";
                     client.sendMessage(from, { text: tagTxt, mentions: tagMeta.participants.map(a => a.id) });
                     break;
@@ -216,7 +217,7 @@ async function startHisoka() {
                 case 'promote': case 'demote':
                     if (!isOwner || !isGroup) return;
                     await client.groupParticipantsUpdate(from, [mentioned], command);
-                    reply("✅ Operation completed.");
+                    reply("✅ Student rank updated.");
                     break;
 
                 case 'kick':
@@ -227,7 +228,7 @@ async function startHisoka() {
                 case 'mute': case 'unmute':
                     if (!isOwner || !isGroup) return;
                     await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
-                    reply(command === 'mute' ? "🔒 Closed" : "🔓 Opened");
+                    reply(command === 'mute' ? "🔒 Group Muted" : "🔓 Group Unmuted");
                     break;
 
                 case 'add':
@@ -238,7 +239,7 @@ async function startHisoka() {
                 case 'antilink': case 'antibadword':
                     if (!isOwner) return;
                     global.db[command] = args[0] === 'on';
-                    reply(`🛡️ ${command.toUpperCase()} set to ${global.db[command] ? 'ON' : 'OFF'}`);
+                    reply(`🛡️ ${command.toUpperCase()} is now ${global.db[command] ? 'ENABLED' : 'DISABLED'}`);
                     break;
 
                 case 'settings':
