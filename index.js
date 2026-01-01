@@ -11,6 +11,7 @@ const path = require('path');
 const axios = require('axios');
 const chalk = require("chalk");
 const pino = require("pino");
+const os = require('os');
 const express = require('express');
 
 const app = express();
@@ -26,7 +27,7 @@ const ownerName = "AYANOKOBOT";
 
 if (!global.serverStarted) {
     app.get('/', (req, res) => res.send('Bot Online'));
-    app.listen(port, "0.0.0.0", () => console.log(chalk.green(`🌐 Port: ${port}`)));
+    app.listen(port, "0.0.0.0");
     global.serverStarted = true;
 }
 
@@ -42,24 +43,9 @@ async function startHisoka() {
         auth: state
     });
 
-    if (!client.authState.creds.registered) {
-        await delay(15000); 
-        try {
-            const code = await client.requestPairingCode("212701458617");
-            console.log(chalk.magenta(`\n PAIRING CODE: ${code} \n`));
-        } catch { startHisoka(); }
-    }
-
     client.ev.on("creds.update", saveCreds);
-    client.ev.on("connection.update", async (up) => {
-        const { connection, lastDisconnect } = up; 
-        if (connection === "open") console.log(chalk.green("✅ CONNECTED"));
-        if (connection === "close") {
-            const code = lastDisconnect?.error?.output?.statusCode;
-            if (code !== 401) { await delay(10000); startHisoka(); }
-        }
-    });
 
+    // 🕵️ ANTI-DELETE CACHE
     client.ev.on("messages.upsert", async (chatUpdate) => {
         const mek = chatUpdate.messages[0];
         if (!mek.message) return;
@@ -92,14 +78,14 @@ async function startHisoka() {
             const isBotAdmin = isGroup ? participants.find(u => u.id === botNumber)?.admin : false;
             const quoted = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
 
+            const reply = (text) => client.sendMessage(from, { text: text }, { quoted: mek });
+
             switch (command) {
                 case 'menu':
-                    const time = new Date().toLocaleTimeString();
-                    const date = new Date().toLocaleDateString();
                     const uptime = process.uptime();
-                    const hours = Math.floor(uptime / 3600);
-                    const minutes = Math.floor((uptime % 3600) / 60);
-                    const seconds = Math.floor(uptime % 60);
+                    const h = Math.floor(uptime / 3600);
+                    const m = Math.floor((uptime % 3600) / 60);
+                    const s = Math.floor(uptime % 60);
 
                     let menuMsg = `┏━━━〔 *${botName}* 〕━━━┓
 ┃ Hi 👋
@@ -107,114 +93,78 @@ async function startHisoka() {
 ┗━━━━━━━━━━━━━━┛
 
 ┏━━━━━━━━━━━━━━┓
-┃ 🌅 *System Status* 🌇
+┃ 🌅 *Ayanokoji System* 🌇
 ┗━━━━━━━━━━━━━━┛
 
 ┏━━━〔 *Bot Info* 〕━━━┓
-┃ *Bot Name :* ${botName}
-┃ *Owner Name :* ${ownerName}
-┃ *Prefix :* .
-┃ *Uptime :* ${hours}h ${minutes}m ${seconds}s
-┃ *Mode :* Public
+┃ *Owner :* ${ownerName}
+┃ *Uptime :* ${h}h ${m}m ${s}s
+┃ *Antilink :* ${global.antilink ? '✅ ON' : '❌ OFF'}
 ┗━━━━━━━━━━━━━━┛
 
 ┏━━━〔 *User Info* 〕━━━┓
 ┃ *Name :* ${mek.pushName || "User"}
 ┃ *Number :* @${sender.split('@')[0]}
-┃ *Rank :* ${isOwner ? "Owner" : "User"}
-┃ *Premium :* ✅
+┃ *Rank :* ${isOwner ? "Elite Owner" : "Student"}
 ┗━━━━━━━━━━━━━━┛
 
-┏━━━〔 *Time Info* 〕━━━┓
-┃ *Time :* ${time}
-┃ *Date :* ${date}
-┗━━━━━━━━━━━━━━┛
-
-┏━━━〔 *Owner Manual* 〕━━━┓
-┃ .vv (Reply ViewOnce)
-┃ .quoted (Reply Deleted)
-┃ .kickall | .bc
-┗━━━━━━━━━━━━━━┛
-
-┏━━━〔 *Group Admin* 〕━━━┓
-┃ .add [number] | .kick
-┃ .promote | .demote
-┃ .mute | .unmute
-┃ .tagall | .hidetag
-┃ .antilink on/off
-┗━━━━━━━━━━━━━━┛
-
-┏━━━〔 *Public* 〕━━━┓
-┃ .ping | .owner | .ai
-┗━━━━━━━━━━━━━━┛
-
-*...Read more*`;
+┏━━━〔 *Commands* 〕━━━┓
+┃ .vv | .quoted | .status
+┃ .hidetag | .tagall | .kickall
+┃ .add | .kick | .mute
+┃ .antilink on/off | .ping
+┗━━━━━━━━━━━━━━┛`;
 
                     await client.sendMessage(from, { 
-                        video: { url: "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJueXF4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4ZzR4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKMGpxx5J1fP44M/giphy.gif" }, 
-                        caption: menuMsg, gifPlayback: true, mentions: [sender]
+                        video: { url: "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3h6Z3RyejR6Z3RyejR6Z3RyejR6Z3RyejR6Z3RyejR6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/vA07zct9tyTLO/giphy.gif" }, 
+                        caption: menuMsg, 
+                        gifPlayback: true, 
+                        mimetype: 'video/mp4',
+                        mentions: [sender]
                     }, { quoted: mek });
                     break;
 
-                case 'hidetag':
-                    if (!isGroup || !isOwner) return;
-                    client.sendMessage(from, { text: q ? q : "📢 Attention Everyone!", mentions: participants.map(a => a.id) });
+                case 'status':
+                    const ram = (os.totalmem() / (1024 * 1024 * 1024)).toFixed(2);
+                    const freeRam = (os.freemem() / (1024 * 1024 * 1024)).toFixed(2);
+                    reply(`💻 *Server Status*:\n\nTotal RAM: ${ram}GB\nFree RAM: ${freeRam}GB\nPlatform: ${os.platform()}\nUptime: ${process.uptime().toFixed(0)}s`);
                     break;
 
-                case 'tagall':
-                    if (!isGroup || !isOwner) return;
-                    let t = `*📢 ATTENTION ALL*\n\n`;
-                    for (let m of participants) { t += ` @${m.id.split('@')[0]}\n`; }
-                    await client.sendMessage(from, { text: t, mentions: participants.map(a => a.id) });
+                case 'antilink':
+                    if (!isGroup || !isOwner) return reply("❌ This is an Elite-level command.");
+                    global.antilink = q.toLowerCase() === 'on';
+                    reply(`🛡️ *Antilink is now ${global.antilink ? 'Active' : 'Inactive'}*`);
+                    break;
+
+                case 'hidetag':
+                    if (!isGroup || !isOwner) return reply("❌ Only the Master can use this.");
+                    await client.sendMessage(from, { text: q ? q : "📢 Observe.", mentions: participants.map(a => a.id) });
+                    reply("✅ *Command executed silently.*");
                     break;
 
                 case 'vv':
-                    if (!isOwner || !quoted) return;
+                    if (!isOwner || !quoted) return reply("❌ Reply to a ViewOnce.");
                     const vType = Object.keys(quoted)[0];
-                    if (vType === 'viewOnceMessageV2' || vType === 'viewOnceMessage') {
+                    if (vType.includes('viewOnce')) {
                         const vo = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
                         const mType = Object.keys(vo.message)[0];
-                        const stream = await downloadContentFromMessage(vo.message[mType], mType === 'imageMessage' ? 'image' : 'video');
+                        const stream = await downloadContentFromMessage(vo.message[mType], mType.split('Message')[0]);
                         let buffer = Buffer.from([]);
                         for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
-                        await client.sendMessage(from, { [mType === 'imageMessage' ? 'image' : 'video']: buffer, caption: "🔓 Decrypted" }, { quoted: mek });
+                        await client.sendMessage(from, { [mType.split('Message')[0]]: buffer, caption: "🔓 Observation Complete." }, { quoted: mek });
                     }
-                    break;
-
-                case 'quoted':
-                    if (!isOwner || !quoted) return;
-                    await client.sendMessage(from, { forward: { key: mek.message.extendedTextMessage.contextInfo.quotedMessage ? mek : null, message: quoted } });
-                    break;
-
-                case 'add':
-                    if (!isGroup || !isBotAdmin || !isOwner) return;
-                    await client.groupParticipantsUpdate(from, [q.replace(/[^0-9]/g, '') + '@s.whatsapp.net'], "add");
                     break;
 
                 case 'kick':
-                    if (!isGroup || !isBotAdmin || !isOwner) return;
+                    if (!isGroup || !isBotAdmin || !isOwner) return reply("❌ Insufficient permissions.");
                     let target = mek.message.extendedTextMessage?.contextInfo?.mentionedJid[0] || (q.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
                     await client.groupParticipantsUpdate(from, [target], "remove");
+                    reply("❌ *Subject Expelled.*");
                     break;
 
-                case 'kickall':
-                    if (!isGroup || !isBotAdmin || !isOwner) return;
-                    const others = participants.filter(v => v.admin === null).map(v => v.id);
-                    for (let m of others) {
-                        await client.groupParticipantsUpdate(from, [m], "remove");
-                        await delay(1500);
-                    }
-                    break;
-
-                case 'mute':
-                case 'unmute':
-                    if (isGroup && isBotAdmin && isOwner) await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
-                    break;
-
-                case 'ping': await client.sendMessage(from, { text: "⚡ Online" }); break;
-                case 'owner': await client.sendMessage(from, { text: isOwner ? "✅ Authenticated" : "❌ Denied" }); break;
+                case 'ping': reply("⚡ *Response Time:* Elite."); break;
             }
-        } catch (e) { console.log(e); }
+        } catch (e) { console.error(e); }
     });
 }
 startHisoka().catch(e => console.log(e));
