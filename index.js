@@ -46,15 +46,16 @@ async function startHisoka() {
     
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"], 
+        // 🛠️ FIX: Updated Browser Mask for Pairing Stability
+        browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         version,
-        connectTimeoutMs: 60000,
+        connectTimeoutMs: 100000,
         printQRInTerminal: false,
-        markOnlineOnConnect: true
+        markOnlineOnConnect: false // FIX: Prevents marking online before handshake completion
     });
 
     client.ev.on("connection.update", async (update) => {
@@ -67,11 +68,15 @@ async function startHisoka() {
         }
 
         if (!client.authState.creds.registered && !update.qr) {
-            await delay(15000); 
+            // 🛠️ FIX: Increased Warmup Delay to 25s for Koyeb
+            console.log(chalk.yellow("⏳ Warming up connection for Pairing Code..."));
+            await delay(25000); 
             try {
                 const code = await client.requestPairingCode(PAIRING_NUMBER);
                 console.log(chalk.black.bgMagenta(`\n 📲 YOUR PAIRING CODE: ${code} \n`));
-            } catch { console.log("Pairing request failed, retrying..."); }
+            } catch (err) { 
+                console.log("Pairing request failed, check if number is correct or wait for cooldown."); 
+            }
         }
     });
 
