@@ -13,7 +13,6 @@ const path = require('path');
 const chalk = require("chalk");
 const pino = require("pino");
 const express = require('express');
-const moment = require("moment-timezone");
 const axios = require("axios");
 
 const app = express();
@@ -26,21 +25,11 @@ if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }
 // 💾 PERSISTENT DATABASE
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
-        antilink: false, 
-        antibot: false, 
-        antiwame: false, 
-        antitagall: false,
-        antibadword: false, 
-        antispam: false, 
-        antifake: false, 
-        antidelete: false,
-        autotyping: false,
-        autorecord: false,
-        autoread: false,
-        onlygroup: false,
-        onlypc: false,
-        welcome: false,
-        goodbye: false
+        antilink: false, antibot: false, antiwame: false, antitagall: false,
+        antibadword: false, antispam: false, antifake: false, antidelete: false,
+        autotyping: false, autorecord: false, autoread: false,
+        onlygroup: false, onlypc: false, welcome: false, goodbye: false,
+        blacklist: []
     }, null, 2));
 }
 global.db = JSON.parse(fs.readFileSync(dbPath));
@@ -50,7 +39,7 @@ const saveDB = () => fs.writeFileSync(dbPath, JSON.stringify(global.db, null, 2)
 const PAIRING_NUMBER = "212701458617"; 
 global.owner = ["212701458617", "85182757527702"]; 
 global.warns = {}; 
-let kickAllConfirm = {};
+let kickAllConfirm = {}; 
 const botName = "GSS-BETA";
 const ownerName = "AYANOKOBOT";
 const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "masisi", "bouzen", "langet manman w", "santi kk", "gyet manman w", "pouri", "bouda fon", "trip pouri", "koko santi", "kalanbe"];
@@ -71,49 +60,28 @@ async function startHisoka() {
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         printQRInTerminal: false,
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 10000,
+        connectTimeoutMs: 120000,
+        keepAliveIntervalMs: 20000,
     });
 
     client.store = {}; 
 
-    // 📲 HARDENED CONNECTION & PAIRING LOGIC
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
-
         if (connection === "open") {
             console.log(chalk.green.bold("\n✅ GSS-BETA SYSTEM ONLINE\n"));
-            
-            // TROUBLESHOOT: Check if session is already active
             if (!client.authState.creds.registered) {
-                console.log(chalk.yellow("📡 Handshake successful. Initializing pairing for: " + PAIRING_NUMBER));
+                console.log(chalk.yellow(`📡 Requesting Pairing Code for: ${PAIRING_NUMBER}`));
                 try {
-                    // Increased delay to 15s to ensure Koyeb container network is stable
                     await delay(15000); 
                     let code = await client.requestPairingCode(PAIRING_NUMBER);
-                    if (code) {
-                        console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
-                    } else {
-                        console.log(chalk.red("❌ Warning: Pairing code returned empty. Retrying connection..."));
-                    }
-                } catch (err) {
-                    console.log(chalk.red("❌ Pairing request failed. Check your number format: " + err));
-                }
-            } else {
-                console.log(chalk.blue("ℹ️  Session loaded. No pairing code needed. If you want to relink, delete the /session folder."));
+                    if (code) console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
+                } catch (err) { console.log(chalk.red("❌ Pairing failed.")); }
             }
         }
-
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`⚠️ Connection Closed. Reason: ${reason}`));
-
-            if (reason === 405 || reason === 401 || reason === DisconnectReason.restartRequired) {
-                console.log(chalk.bgMagenta("🔄 Resetting session to bypass 405/401..."));
-                await delay(10000);
-                startHisoka();
-            } else if (reason !== DisconnectReason.loggedOut) {
+            if (reason !== DisconnectReason.loggedOut) {
                 startHisoka();
             }
         }
@@ -144,11 +112,17 @@ async function startHisoka() {
             const isBotAdmin = groupAdmins.includes(client.user.id.split(':')[0] + '@s.whatsapp.net');
             const isSenderAdmin = groupAdmins.includes(sender);
 
-            // 🛡️ SECURITY
+            // 🛡️ SECURITY AUTO-LOGIC
             if (isGroup && isBotAdmin && !isOwner && !isSenderAdmin) {
+                // Anti-Link
                 if (global.db.antilink && lowerBody.includes("chat.whatsapp.com")) {
                     await client.sendMessage(from, { delete: mek.key });
                     return client.groupParticipantsUpdate(from, [sender], "remove");
+                }
+                // Anti-Badword
+                if (global.db.antibadword && badWords.some(word => lowerBody.includes(word))) {
+                    await client.sendMessage(from, { delete: mek.key });
+                    reply("🚫 Bad word detected. Warned.");
                 }
             }
 
@@ -191,27 +165,90 @@ ${readMore}
                     reply(menuMsg);
                     break;
 
-                case 'tagall': case 'hidetag':
-                    if (!isGroup || !isSenderAdmin) return reply("❌ Admin only.");
-                    client.sendMessage(from, { text: q ? q : '📢 Attention', mentions: groupMetadata.participants.map(v => v.id) });
+                // --- ADMIN & GROUP COMMANDS ---
+                case 'add':
+                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Error: Admin only.");
+                    let users = q.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                    await client.groupParticipantsUpdate(from, [users], "add");
+                    reply("✅ User Added.");
                     break;
 
-                case 'kick': case 'add': case 'promote': case 'demote':
-                    if (!isBotAdmin) return reply("❌ Bot is not Admin.");
-                    if (!isSenderAdmin && !isOwner) return reply("❌ Admin only.");
-                    let u = command === 'add' ? q.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : target;
-                    if (!u) return reply("❓ Reply or Tag user.");
-                    await client.groupParticipantsUpdate(from, [u], command === 'kick' ? 'remove' : (command === 'add' ? 'add' : command));
-                    reply("✅ Done.");
+                case 'kick':
+                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Error: Admin only.");
+                    if (!target) return reply("❓ Tag or reply to user.");
+                    await client.groupParticipantsUpdate(from, [target], "remove");
+                    reply("✅ User Removed.");
+                    break;
+
+                case 'tagall': case 'hidetag':
+                    if (!isGroup || !isSenderAdmin) return reply("❌ Admin only.");
+                    client.sendMessage(from, { text: q ? q : '📢 Attention Everyone', mentions: groupMetadata.participants.map(v => v.id) });
+                    break;
+
+                case 'kickall':
+                    if (!isGroup || !isOwner) return reply("❌ Owner only.");
+                    if (!kickAllConfirm[from]) {
+                        kickAllConfirm[from] = true;
+                        reply("⚠️ Safety: Type `.kickall` again within 10s to confirm wiping this group.");
+                        setTimeout(() => delete kickAllConfirm[from], 10000);
+                    } else {
+                        const all = groupMetadata.participants.filter(v => !global.owner.includes(v.id.split('@')[0]));
+                        for (let mem of all) { await client.groupParticipantsUpdate(from, [mem.id], "remove"); await delay(500); }
+                        delete kickAllConfirm[from];
+                    }
                     break;
 
                 case 'mute': case 'unmute':
-                    if (!isSenderAdmin) return reply("❌ Admin only.");
+                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Admin only.");
                     await client.groupUpdateSubject(from, command === 'mute' ? "announcement" : "not_announcement");
                     reply(`✅ Group ${command}d.`);
                     break;
 
-                case 'steal': case 'vv':
+                case 'promote': case 'demote':
+                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Admin only.");
+                    if (!target) return reply("❓ Tag/Reply to user.");
+                    await client.groupParticipantsUpdate(from, [target], command);
+                    reply("✅ Done.");
+                    break;
+
+                case 'groupinfo':
+                    if (!isGroup) return;
+                    reply(`*Group:* ${groupMetadata.subject}\n*Members:* ${groupMetadata.participants.length}\n*Admins:* ${groupAdmins.length}`);
+                    break;
+
+                case 'time':
+                    reply(`🕒 Current Time: ${new Date().toLocaleString()}`);
+                    break;
+
+                // --- SECURITY & TOGGLES ---
+                case 'antilink': case 'antibot': case 'antiwame': case 'antitagall':
+                case 'antispam': case 'antifake': case 'antibadword': case 'antidelete':
+                    if (!isOwner) return reply("❌ Owner only.");
+                    global.db[command] = !global.db[command];
+                    saveDB();
+                    reply(`✅ ${command.toUpperCase()} is now ${global.db[command] ? "ON" : "OFF"}`);
+                    break;
+
+                case 'status':
+                    let stats = `⚙️ *SYSTEM STATUS*\n\n`;
+                    for (let key in global.db) {
+                        if (typeof global.db[key] === 'boolean') stats += `${global.db[key] ? '✅' : '❌'} ${key.toUpperCase()}\n`;
+                    }
+                    reply(stats);
+                    break;
+
+                // --- UTILITY & FUN ---
+                case 'ping':
+                    reply(`⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms`);
+                    break;
+
+                case 'ai':
+                    if (!q) return reply("❓ Say something.");
+                    const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
+                    reply(`🤖 ${res.data.success || "AI Error"}`);
+                    break;
+
+                case 'vv': case 'steal':
                     if (!quotedMsg) return reply("❌ Reply to a View-Once.");
                     const type = Object.keys(quotedMsg)[0];
                     const stream = await downloadContentFromMessage(quotedMsg[type], type.replace('Message', ''));
@@ -220,46 +257,45 @@ ${readMore}
                     client.sendMessage(from, { [type.replace('Message', '')]: buffer, caption: "✅ Stolen" }, { quoted: mek });
                     break;
 
-                case 'ai':
-                    if (!q) return reply("❓ Ask something.");
-                    const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                    reply(`🤖 ${res.data.success}`);
+                case 'owner':
+                    client.sendMessage(from, { contact: { displayName: ownerName, vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:${ownerName}\nTEL;waid=${global.owner[0]}:${global.owner[0]}\nEND:VCARD` } });
                     break;
 
-                case 'status':
-                    let s = `⚙️ *CONFIG*\n`;
-                    for (let key in global.db) s += `${global.db[key] ? '✅' : '❌'} ${key.toUpperCase()}\n`;
-                    reply(s);
+                case 'warn':
+                    if (!isSenderAdmin) return reply("❌ Admin only.");
+                    if (!target) return reply("❓ Tag/Reply.");
+                    global.warns[target] = (global.warns[target] || 0) + 1;
+                    reply(`⚠️ Warning added [${global.warns[target]}/3]`);
+                    if (global.warns[target] >= 3) {
+                        await client.groupParticipantsUpdate(from, [target], "remove");
+                        delete global.warns[target];
+                    }
                     break;
 
-                case 'antilink': case 'antidelete': case 'antibot':
-                case 'autotyping': case 'autorecord': case 'autoread':
-                case 'welcome': case 'goodbye':
+                case 'unwarn':
+                    if (!isSenderAdmin) return reply("❌ Admin only.");
+                    delete global.warns[target];
+                    reply("✅ Warnings reset.");
+                    break;
+
+                case 'blacklist':
                     if (!isOwner) return reply("❌ Owner only.");
-                    global.db[command] = !global.db[command];
+                    if (!target) return reply("❓ Tag/Reply.");
+                    global.db.blacklist.push(target);
                     saveDB();
-                    reply(`✅ ${command} is now ${global.db[command] ? "ON" : "OFF"}`);
+                    reply("✅ User Blacklisted.");
                     break;
 
-                case 'ping':
-                    reply(`⚡ ${Date.now() - mek.messageTimestamp * 1000}ms`);
+                case 'settings':
+                    reply(`To toggle settings, use .antilink, .antibot, etc. View current with .status`);
+                    break;
+
+                case 'backup':
+                    if (!isOwner) return;
+                    await client.sendMessage(from, { document: fs.readFileSync(dbPath), fileName: 'database.json', mimetype: 'application/json' });
                     break;
             }
-        } catch (e) { console.log(chalk.red(e)); }
-    });
-
-    // 🕵️ ANTI-DELETE HANDLER
-    client.ev.on("messages.update", async (chatUpdate) => {
-        for (const { key, update } of chatUpdate) {
-            if (update.protocolMessage?.type === 3 && global.db.antidelete) {
-                const msg = client.store[update.protocolMessage.key.id];
-                if (!msg) return;
-                const sender = msg.key.participant || msg.key.remoteJid;
-                let report = `🕵️ *ANTI-DELETE*\n👤 From: @${sender.split('@')[0]}`;
-                await client.sendMessage(client.user.id, { text: report, mentions: [sender] });
-                await client.sendMessage(client.user.id, { forward: msg });
-            }
-        }
+        } catch (e) { console.log(e); }
     });
 }
 startHisoka();
