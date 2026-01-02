@@ -22,7 +22,7 @@ const dbPath = path.join(__dirname, 'database.json');
 
 if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
 
-// 💾 DATABASE
+// 💾 PERSISTENT DATABASE
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
         antilink: false, antibot: false, antiwame: false, antitagall: false,
@@ -57,10 +57,30 @@ async function startHisoka() {
 
     client.store = {}; // For Anti-Delete
 
+    // 📲 IMPROVED PAIRING LOGIC (INTEGRATED)
     if (!client.authState.creds.registered) {
-        await delay(3000); 
-        let code = await client.requestPairingCode(PAIRING_NUMBER);
-        console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
+        console.log(chalk.yellow("⏳ Waiting 10 seconds for stable connection before requesting code..."));
+        await delay(10000); // Increased delay for Koyeb network stability
+        
+        let retryCount = 0;
+        const maxRetries = 5;
+
+        async function getPairingCode() {
+            try {
+                let code = await client.requestPairingCode(PAIRING_NUMBER);
+                console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
+            } catch (err) {
+                if (retryCount < maxRetries) {
+                    retryCount++;
+                    console.log(chalk.red(`❌ Pairing failed (Attempt ${retryCount}/${maxRetries}). Retrying in 5s...`));
+                    await delay(5000);
+                    return getPairingCode();
+                } else {
+                    console.log(chalk.bgRed("🚨 Max retries reached. Please restart the Koyeb service."));
+                }
+            }
+        }
+        await getPairingCode();
     }
 
     client.ev.on("creds.update", saveCreds);
@@ -70,7 +90,7 @@ async function startHisoka() {
             const mek = chatUpdate.messages[0];
             if (!mek.message) return;
             const from = mek.key.remoteJid;
-            client.store[mek.key.id] = mek; // Store message
+            client.store[mek.key.id] = mek; 
 
             if (mek.key.fromMe) return;
 
