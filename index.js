@@ -85,15 +85,23 @@ async function startHisoka() {
         if (connection === "open") {
             console.log(chalk.green.bold("\n✅ GSS-BETA SYSTEM ONLINE\n"));
             
+            // TROUBLESHOOT: Check if session is already active
             if (!client.authState.creds.registered) {
-                console.log(chalk.yellow("📡 Handshake successful. Waiting for pairing code..."));
+                console.log(chalk.yellow("📡 Handshake successful. Initializing pairing for: " + PAIRING_NUMBER));
                 try {
-                    await delay(10000); 
+                    // Increased delay to 15s to ensure Koyeb container network is stable
+                    await delay(15000); 
                     let code = await client.requestPairingCode(PAIRING_NUMBER);
-                    console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
+                    if (code) {
+                        console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
+                    } else {
+                        console.log(chalk.red("❌ Warning: Pairing code returned empty. Retrying connection..."));
+                    }
                 } catch (err) {
-                    console.log(chalk.red("❌ Pairing request failed. Retrying..."));
+                    console.log(chalk.red("❌ Pairing request failed. Check your number format: " + err));
                 }
+            } else {
+                console.log(chalk.blue("ℹ️  Session loaded. No pairing code needed. If you want to relink, delete the /session folder."));
             }
         }
 
@@ -102,7 +110,7 @@ async function startHisoka() {
             console.log(chalk.red(`⚠️ Connection Closed. Reason: ${reason}`));
 
             if (reason === 405 || reason === 401 || reason === DisconnectReason.restartRequired) {
-                console.log(chalk.bgMagenta("🔄 Resetting session to bypass 405..."));
+                console.log(chalk.bgMagenta("🔄 Resetting session to bypass 405/401..."));
                 await delay(10000);
                 startHisoka();
             } else if (reason !== DisconnectReason.loggedOut) {
