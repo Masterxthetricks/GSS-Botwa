@@ -35,7 +35,7 @@ if (!fs.existsSync(dbPath)) {
 global.db = JSON.parse(fs.readFileSync(dbPath));
 const saveDB = () => fs.writeFileSync(dbPath, JSON.stringify(global.db, null, 2));
 
-// 🔒 CONFIG
+// 🔒 CONFIG (HARDCODED)
 const PAIRING_NUMBER = "212701458617"; 
 global.owner = ["212701458617", "85182757527702"]; 
 global.warns = {}; 
@@ -47,6 +47,9 @@ const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "ma
 app.get('/', (req, res) => res.status(200).send('GSS-BETA Online'));
 app.listen(port, "0.0.0.0");
 
+// SELF-PING TO PREVENT KOYEB IDLE
+setInterval(() => { axios.get(`http://localhost:${port}`).catch(() => {}); }, 300000);
+
 async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
@@ -54,35 +57,41 @@ async function startHisoka() {
     const client = goutamConnect({
         version,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "110.0.5481.178"], 
+        browser: ["Ubuntu", "Chrome", "20.0.04"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         printQRInTerminal: false,
         connectTimeoutMs: 120000,
-        keepAliveIntervalMs: 20000,
+        keepAliveIntervalMs: 30000,
     });
 
     client.store = {}; 
+
+    // 📲 PAIRING CODE GENERATOR LOGIC
+    if (!client.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                let code = await client.requestPairingCode(PAIRING_NUMBER);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log(chalk.black.bgGreen.bold(`\n 📲 YOUR PAIRING CODE: ${code} \n`));
+            } catch (error) {
+                console.log(chalk.red("❌ Failed to generate pairing code: "), error);
+            }
+        }, 15000); 
+    }
 
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === "open") {
             console.log(chalk.green.bold("\n✅ GSS-BETA SYSTEM ONLINE\n"));
-            if (!client.authState.creds.registered) {
-                console.log(chalk.yellow(`📡 Requesting Pairing Code for: ${PAIRING_NUMBER}`));
-                try {
-                    await delay(15000); 
-                    let code = await client.requestPairingCode(PAIRING_NUMBER);
-                    if (code) console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
-                } catch (err) { console.log(chalk.red("❌ Pairing failed.")); }
-            }
         }
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
             if (reason !== DisconnectReason.loggedOut) {
-                startHisoka();
+                console.log(chalk.red(`🔄 Connection Lost (${reason}). Restarting...`));
+                setTimeout(() => startHisoka(), 5000);
             }
         }
     });
@@ -95,7 +104,6 @@ async function startHisoka() {
             if (!mek.message) return;
             const from = mek.key.remoteJid;
             client.store[mek.key.id] = mek; 
-
             if (mek.key.fromMe) return;
 
             const isGroup = from.endsWith('@g.us');
@@ -114,15 +122,13 @@ async function startHisoka() {
 
             // 🛡️ SECURITY AUTO-LOGIC
             if (isGroup && isBotAdmin && !isOwner && !isSenderAdmin) {
-                // Anti-Link
                 if (global.db.antilink && lowerBody.includes("chat.whatsapp.com")) {
                     await client.sendMessage(from, { delete: mek.key });
                     return client.groupParticipantsUpdate(from, [sender], "remove");
                 }
-                // Anti-Badword
                 if (global.db.antibadword && badWords.some(word => lowerBody.includes(word))) {
                     await client.sendMessage(from, { delete: mek.key });
-                    reply("🚫 Bad word detected. Warned.");
+                    reply("🚫 Bad word detected. Action: Deleted.");
                 }
             }
 
@@ -134,8 +140,6 @@ async function startHisoka() {
             const quotedMsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
             let target = mentioned[0] || (quotedMsg ? mek.message.extendedTextMessage.contextInfo.participant : null);
-
-            console.log(chalk.cyan(`[COMMAND] .${command} | User: ${senderNumber}`));
 
             switch (command) {
                 case 'menu':
@@ -165,68 +169,56 @@ ${readMore}
                     reply(menuMsg);
                     break;
 
-                // --- ADMIN & GROUP COMMANDS ---
-                case 'add':
-                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Error: Admin only.");
-                    let users = q.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                    await client.groupParticipantsUpdate(from, [users], "add");
-                    reply("✅ User Added.");
-                    break;
-
-                case 'kick':
-                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Error: Admin only.");
-                    if (!target) return reply("❓ Tag or reply to user.");
-                    await client.groupParticipantsUpdate(from, [target], "remove");
-                    reply("✅ User Removed.");
+                // --- ADMIN ---
+                case 'add': case 'kick': case 'promote': case 'demote':
+                    if (!isBotAdmin || !isSenderAdmin) return reply("❌ Admin only.");
+                    let u = command === 'add' ? q.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : target;
+                    if (!u) return reply("❓ Tag or reply to user.");
+                    await client.groupParticipantsUpdate(from, [u], command === 'add' ? 'add' : (command === 'kick' ? 'remove' : command));
+                    reply("✅ Done.");
                     break;
 
                 case 'tagall': case 'hidetag':
                     if (!isGroup || !isSenderAdmin) return reply("❌ Admin only.");
-                    client.sendMessage(from, { text: q ? q : '📢 Attention Everyone', mentions: groupMetadata.participants.map(v => v.id) });
+                    client.sendMessage(from, { text: q ? q : '📢 Attention', mentions: groupMetadata.participants.map(v => v.id) });
                     break;
 
                 case 'kickall':
                     if (!isGroup || !isOwner) return reply("❌ Owner only.");
                     if (!kickAllConfirm[from]) {
                         kickAllConfirm[from] = true;
-                        reply("⚠️ Safety: Type `.kickall` again within 10s to confirm wiping this group.");
+                        reply("⚠️ Safety: Type `.kickall` again within 10s to confirm.");
                         setTimeout(() => delete kickAllConfirm[from], 10000);
                     } else {
-                        const all = groupMetadata.participants.filter(v => !global.owner.includes(v.id.split('@')[0]));
+                        const all = groupMetadata.participants.filter(v => !global.owner.includes(v.id.split('@')[0]) && v.id !== client.user.id);
                         for (let mem of all) { await client.groupParticipantsUpdate(from, [mem.id], "remove"); await delay(500); }
+                        reply("✅ Group wiped.");
                         delete kickAllConfirm[from];
                     }
                     break;
 
                 case 'mute': case 'unmute':
-                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Admin only.");
+                    if (!isSenderAdmin) return reply("❌ Admin only.");
                     await client.groupUpdateSubject(from, command === 'mute' ? "announcement" : "not_announcement");
                     reply(`✅ Group ${command}d.`);
                     break;
 
-                case 'promote': case 'demote':
-                    if (!isGroup || !isBotAdmin || !isSenderAdmin) return reply("❌ Admin only.");
-                    if (!target) return reply("❓ Tag/Reply to user.");
-                    await client.groupParticipantsUpdate(from, [target], command);
-                    reply("✅ Done.");
-                    break;
-
                 case 'groupinfo':
                     if (!isGroup) return;
-                    reply(`*Group:* ${groupMetadata.subject}\n*Members:* ${groupMetadata.participants.length}\n*Admins:* ${groupAdmins.length}`);
+                    reply(`*Group:* ${groupMetadata.subject}\n*Members:* ${groupMetadata.participants.length}`);
                     break;
 
                 case 'time':
-                    reply(`🕒 Current Time: ${new Date().toLocaleString()}`);
+                    reply(`🕒 ${new Date().toLocaleString()}`);
                     break;
 
-                // --- SECURITY & TOGGLES ---
+                // --- SECURITY ---
                 case 'antilink': case 'antibot': case 'antiwame': case 'antitagall':
                 case 'antispam': case 'antifake': case 'antibadword': case 'antidelete':
                     if (!isOwner) return reply("❌ Owner only.");
                     global.db[command] = !global.db[command];
                     saveDB();
-                    reply(`✅ ${command.toUpperCase()} is now ${global.db[command] ? "ON" : "OFF"}`);
+                    reply(`✅ ${command.toUpperCase()} is ${global.db[command] ? "ON" : "OFF"}`);
                     break;
 
                 case 'status':
@@ -237,24 +229,24 @@ ${readMore}
                     reply(stats);
                     break;
 
-                // --- UTILITY & FUN ---
+                // --- UTILITY ---
                 case 'ping':
                     reply(`⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms`);
                     break;
 
                 case 'ai':
-                    if (!q) return reply("❓ Say something.");
+                    if (!q) return reply("❓ Ask me something.");
                     const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                    reply(`🤖 ${res.data.success || "AI Error"}`);
+                    reply(`🤖 ${res.data.success}`);
                     break;
 
                 case 'vv': case 'steal':
                     if (!quotedMsg) return reply("❌ Reply to a View-Once.");
-                    const type = Object.keys(quotedMsg)[0];
-                    const stream = await downloadContentFromMessage(quotedMsg[type], type.replace('Message', ''));
+                    const vtype = Object.keys(quotedMsg)[0];
+                    const stream = await downloadContentFromMessage(quotedMsg[vtype], vtype.replace('Message', ''));
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
-                    client.sendMessage(from, { [type.replace('Message', '')]: buffer, caption: "✅ Stolen" }, { quoted: mek });
+                    client.sendMessage(from, { [vtype.replace('Message', '')]: buffer, caption: "✅ Stolen" }, { quoted: mek });
                     break;
 
                 case 'owner':
@@ -265,7 +257,7 @@ ${readMore}
                     if (!isSenderAdmin) return reply("❌ Admin only.");
                     if (!target) return reply("❓ Tag/Reply.");
                     global.warns[target] = (global.warns[target] || 0) + 1;
-                    reply(`⚠️ Warning added [${global.warns[target]}/3]`);
+                    reply(`⚠️ Warned [${global.warns[target]}/3]`);
                     if (global.warns[target] >= 3) {
                         await client.groupParticipantsUpdate(from, [target], "remove");
                         delete global.warns[target];
@@ -287,7 +279,7 @@ ${readMore}
                     break;
 
                 case 'settings':
-                    reply(`To toggle settings, use .antilink, .antibot, etc. View current with .status`);
+                    reply(`Current database settings: Use .status to view.`);
                     break;
 
                 case 'backup':
