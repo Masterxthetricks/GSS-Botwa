@@ -47,42 +47,51 @@ app.listen(port, "0.0.0.0");
 
 async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"], 
+        // Fixed 405 by using a modern desktop browser string
+        browser: ["Mac OS", "Chrome", "121.0.6167.184"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 30000,
     });
 
     client.store = {}; 
 
-    // 📲 EVENT-DRIVEN PAIRING LOGIC
+    // 📲 HARDENED CONNECTION & PAIRING LOGIC
     client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === "open") {
-            console.log(chalk.green.bold("\n✅ GSS-BETA CONNECTED TO WHATSAPP\n"));
+            console.log(chalk.green.bold("\n✅ GSS-BETA SYSTEM ONLINE\n"));
             
             if (!client.authState.creds.registered) {
-                console.log(chalk.yellow("📡 Connection verified. Requesting pairing code..."));
+                console.log(chalk.yellow("📡 Handshake successful. Waiting 8s for pairing code..."));
                 try {
-                    await delay(5000); 
+                    await delay(8000); 
                     let code = await client.requestPairingCode(PAIRING_NUMBER);
                     console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
                 } catch (err) {
-                    console.log(chalk.red("❌ Pairing request failed. Please restart Koyeb."));
+                    console.log(chalk.red("❌ Pairing request failed. Retrying..."));
                 }
             }
         }
 
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(chalk.red(`Connection closed. Reason: ${reason}`));
-            if (reason !== DisconnectReason.loggedOut) {
+            console.log(chalk.red(`⚠️ Connection Closed. Reason: ${reason}`));
+
+            // Recovery for 405 (Method Not Allowed) or 401 (Unauthorized)
+            if (reason === 405 || reason === 401 || reason === DisconnectReason.restartRequired) {
+                console.log(chalk.bgMagenta("🔄 Resetting session to bypass 405..."));
+                await delay(5000);
+                startHisoka();
+            } else if (reason !== DisconnectReason.loggedOut) {
                 startHisoka();
             }
         }
