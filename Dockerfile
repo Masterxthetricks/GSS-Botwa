@@ -1,23 +1,25 @@
-# Use the official Node.js image (Guaranteed to work)
+# Use the official Node.js image (Modern and Fast)
 FROM node:22-slim
 
-# Install system dependencies for WhatsApp (Puppeteer/Chromium requirements)
+# Install system dependencies for WhatsApp media (FFmpeg, ImageMagick, and WebP)
 RUN apt-get update && apt-get install -y \
     git \
     ffmpeg \
     imagemagick \
+    webp \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the work directory
+# Set the work directory inside the container
 WORKDIR /usr/src/app
 
-# Copy all your project files
-COPY . .
-
-# Install dependencies
+# Copy package files first to optimize layer caching
+COPY package.json .
 RUN npm install
 
-# Expose port 8080 to match your index.js
+# Copy the rest of your project files
+COPY . .
+
+# Expose port 8080 to match your index.js and Koyeb settings
 EXPOSE 8080
 
 # Start the bot
