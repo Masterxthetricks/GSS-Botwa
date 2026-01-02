@@ -1,9 +1,3 @@
-Here is the complete, final version of your index.js.
-
-I have integrated the Auto-Kick logic for Antilink (links in chat) and Antifake (international numbers joining), as well as the full suite of Group, Security, and Utility commands you requested.
-
-JavaScript
-
 require("dotenv").config();
 const { 
     default: goutamConnect, 
@@ -42,8 +36,7 @@ global.db = {
     antibadword: false, antibadwordnokick: false, antispam: false, 
     antiban: true, antifake: false, antidelete: false
 };
-
-global.warns = {}; // Store warnings
+global.warns = {}; 
 
 app.get('/', (req, res) => res.status(200).send('GSS-BETA Online'));
 app.listen(port, "0.0.0.0");
@@ -62,57 +55,45 @@ async function startHisoka() {
         version,
         markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 10000
     });
 
-    // 📲 PAIRING LOGIC
+    // 📲 PAIRING CODE LOGIC (Locked to PAIRING_NUMBER)
     if (!client.authState.creds.registered) {
         await delay(3000); 
         const phoneNumber = PAIRING_NUMBER.replace(/[^0-9]/g, '');
         try {
             let code = await client.requestPairingCode(phoneNumber);
-            console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
-        } catch (err) {
-            console.log(chalk.red.bold("❌ Pairing Request Failed."));
-        }
+            console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE FOR ${phoneNumber}: ${code} \n`));
+        } catch (err) { console.log("Pairing error: Check internet connection."); }
     }
 
-   // 🛡️ ADVANCED ANTI-FAKE & ANTI-BOT LOGIC
+    // 🛡️ REFINED ANTI-FAKE/BOT PROTECTION
     client.ev.on("group-participants.update", async (anu) => {
         if (!global.db.antifake || anu.action !== 'add') return;
-
         for (let num of anu.participants) {
             const userId = num.split('@')[0];
             
-            // 1. Kick Common Virtual Number Countries (USA +1, etc.) 
-            // 2. Or numbers NOT starting with your trusted prefix (212)
-            const isVirtual = userId.startsWith("1") || userId.startsWith("44"); 
-            const isNotTrusted = !userId.startsWith("212"); 
+            // Logic: Kick USA/UK virtuals (+1/+44) OR IDs with bot keywords OR IDs longer than standard phones
+            const isVirtual = userId.startsWith("1") || userId.startsWith("44");
+            const isBotId = userId.length > 15 || /bot/i.test(userId);
 
-            // 3. Bot Keyword Detection (If number contains specific "bot" patterns)
-            const isBotPattern = /bot/i.test(userId) || userId.length > 15; 
-
-            if (isVirtual || isNotTrusted || isBotPattern) {
-                // Skip if it's the owner trying to join
-                if (global.owner.includes(userId)) continue;
-
-                console.log(chalk.red.bold(`🛡️ Kicking suspicious member: ${userId}`));
-                
-                await client.sendMessage(anu.id, { 
-                    text: `🛡️ *Security System*: @${userId} detected as a Fake/Bot number and removed.`, 
-                    mentions: [num] 
-                });
-
-                await client.groupParticipantsUpdate(anu.id, [num], "remove");
+            if ((isVirtual || isBotId) && !global.owner.includes(userId)) {
+                try {
+                    await client.groupParticipantsUpdate(anu.id, [num], "remove");
+                    client.sendMessage(anu.id, { text: `🛡️ *Virtual/Bot Detected*: @${userId} removed.`, mentions: [num] });
+                } catch (e) { console.log("Security Kick Failed."); }
             }
         }
     });
 
     client.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startHisoka();
-        else if (connection === "open") console.log(chalk.green.bold("✅ GSS-BETA CONNECTED"));
+        if (connection === "close") {
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startHisoka();
+        } else if (connection === "open") {
+            console.log(chalk.green.bold("✅ GSS-BETA CONNECTED"));
+        }
     });
 
     client.ev.on("creds.update", saveCreds);
@@ -135,22 +116,15 @@ async function startHisoka() {
             const groupAdmins = isGroup ? groupMetadata.participants.filter(v => v.admin !== null).map(v => v.id) : [];
             const isBotAdmin = isGroup ? groupAdmins.includes(client.user.id.split(':')[0] + '@s.whatsapp.net') : false;
 
-            // 🛡️ ANTI-LINK LOGIC
-            if (isGroup && global.db.antilink && isBotAdmin && !isOwner) {
-                if (lowerBody.includes("http://") || lowerBody.includes("https://") || lowerBody.includes("chat.whatsapp.com")) {
+            // 🛡️ AUTO-SECURITY CHECK
+            if (isGroup && isBotAdmin && !isOwner) {
+                if (global.db.antilink && (lowerBody.includes("http://") || lowerBody.includes("chat.whatsapp.com"))) {
                     await client.sendMessage(from, { delete: mek.key });
-                    await client.groupParticipantsUpdate(from, [sender], "remove");
-                    return;
+                    return await client.groupParticipantsUpdate(from, [sender], "remove");
                 }
-            }
-
-            // 🛡️ ANTI-BADWORD LOGIC
-            if (isGroup && global.db.antibadword && !isOwner) {
-                if (badWords.some(word => lowerBody.includes(word))) {
+                if (global.db.antibadword && badWords.some(word => lowerBody.includes(word))) {
                     await client.sendMessage(from, { delete: mek.key });
-                    if (!global.db.antibadwordnokick && isBotAdmin) {
-                        await client.groupParticipantsUpdate(from, [sender], "remove");
-                    }
+                    if (!global.db.antibadwordnokick) await client.groupParticipantsUpdate(from, [sender], "remove");
                     return;
                 }
             }
@@ -160,18 +134,15 @@ async function startHisoka() {
             const command = args.shift().toLowerCase();
             const q = args.join(" ");
             const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-            
-            let target = mentioned[0] || mek.message.extendedTextMessage?.contextInfo?.participant;
-            if (!target && q) {
-                let cleanNum = q.replace(/[^0-9]/g, '');
-                if (cleanNum.length > 8) target = cleanNum + "@s.whatsapp.net";
-            }
+            const quotedMsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
+
+            let target = mentioned[0] || (quotedMsg ? mek.message.extendedTextMessage.contextInfo.participant : null);
+            if (!target && q) target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
 
             const readMore = String.fromCharCode(8206).repeat(4001);
 
             switch (command) {
-                case 'menu':
-                case 'help':
+                case 'menu': case 'help':
                     const uptime = process.uptime();
                     const h = Math.floor(uptime / 3600);
                     const m = Math.floor((uptime % 3600) / 60);
@@ -203,126 +174,124 @@ ${readMore}
 │ .ping | .ai | .vv | .owner | .steal
 │ .warn | .unwarn | .blacklist | .settings
 ╰───────────────────`;
-                    await client.sendMessage(from, { 
-                        video: { url: 'https://media.giphy.com/media/Uau9JUChC8FdZnmVmX/giphy.mp4' }, 
-                        caption: menuMsg, gifPlayback: true, mentions: [sender] 
-                    }, { quoted: mek });
+                    
+                    try {
+                        await client.sendMessage(from, { 
+                            video: { url: 'https://media.giphy.com/media/Uau9JUChC8FdZnmVmX/giphy.mp4' }, 
+                            caption: menuMsg, gifPlayback: true, mentions: [sender] 
+                        }, { quoted: mek });
+                    } catch (e) {
+                        reply(menuMsg); // Fallback if video URL fails
+                    }
                     break;
 
-                // --- GROUP COMMANDS ---
                 case 'kickall':
-                    if (!isOwner || !isGroup || !isBotAdmin) return reply("Admin/Owner required.");
-                    const participants = groupMetadata.participants;
+                    if (!isOwner || !isGroup || !isBotAdmin) return reply("Access Denied.");
                     reply("🧹 Cleaning group members...");
-                    for (let mem of participants) {
+                    for (let mem of groupMetadata.participants) {
                         if (mem.id !== client.user.id.split(':')[0] + '@s.whatsapp.net' && !global.owner.includes(mem.id.split('@')[0])) {
                             await client.groupParticipantsUpdate(from, [mem.id], "remove");
+                            await delay(400); 
                         }
                     }
-                    reply("✅ Done.");
+                    reply("✅ Group Cleared.");
                     break;
 
                 case 'tagall':
-                    if (!isOwner || !isGroup) return;
+                    if (!isGroup || !isOwner) return;
                     let teks = `*📢 TAG ALL*\n\n`;
-                    let ms = groupMetadata.participants.map(mem => {
-                        teks += `🔘 @${mem.id.split('@')[0]}\n`;
-                        return mem.id;
-                    });
+                    let ms = groupMetadata.participants.map(mem => { teks += `🔘 @${mem.id.split('@')[0]}\n`; return mem.id; });
                     client.sendMessage(from, { text: teks, mentions: ms });
                     break;
 
                 case 'hidetag':
-                    if (!isOwner || !isGroup) return;
-                    client.sendMessage(from, { text: q, mentions: groupMetadata.participants.map(a => a.id) });
+                    if (!isGroup || !isOwner) return;
+                    client.sendMessage(from, { text: q ? q : '', mentions: groupMetadata.participants.map(a => a.id) });
+                    break;
+
+                case 'add': case 'kick': case 'promote': case 'demote':
+                    if (!isBotAdmin || !isOwner) return reply("Requires Admin/Owner.");
+                    if (!target) return reply("Tag/Reply/Number needed.");
+                    let act = (command === 'kick') ? 'remove' : (command === 'add') ? 'add' : command;
+                    await client.groupParticipantsUpdate(from, [target], act).then(() => reply("✅ Done"));
                     break;
 
                 case 'mute': case 'unmute':
-                    if (!isOwner || !isBotAdmin) return;
+                    if (!isBotAdmin || !isOwner) return;
                     await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
-                    reply(`✅ Group ${command}d`);
+                    reply("✅ Group status updated.");
                     break;
 
-                case 'add':
-                    if (!isOwner || !isBotAdmin) return;
-                    await client.groupParticipantsUpdate(from, [target], "add").then(() => reply("✅ Added"));
+                case 'antilink': case 'antibot': case 'antiwame': case 'antitagall': case 'antispam': case 'antifake': case 'antibadword': case 'antidelete':
+                    if (!isOwner) return;
+                    global.db[command] = !global.db[command];
+                    reply(`🛡️ ${command.toUpperCase()}: ${global.db[command] ? 'ON ✅' : 'OFF ❌'}`);
                     break;
 
-                case 'kick':
-                    if (!isOwner || !isBotAdmin) return;
-                    await client.groupParticipantsUpdate(from, [target], "remove").then(() => reply("✅ Kicked"));
+                case 'status': case 'settings':
+                    if (!isOwner) return;
+                    let st = `⚙️ *SYSTEM SETTINGS*\n\n`;
+                    for (let key in global.db) { st += `• ${key.toUpperCase()}: ${global.db[key] ? '✅' : '❌'}\n`; }
+                    reply(st);
                     break;
 
-                case 'promote': case 'demote':
-                    if (!isOwner || !isBotAdmin) return;
-                    await client.groupParticipantsUpdate(from, [target], command);
-                    reply(`✅ Success ${command}`);
+                case 'warn':
+                    if (!isBotAdmin || !isOwner) return;
+                    if (!target) return reply("Tag user.");
+                    global.warns[target] = (global.warns[target] || 0) + 1;
+                    if (global.warns[target] >= 3) {
+                        await client.groupParticipantsUpdate(from, [target], "remove");
+                        delete global.warns[target];
+                        reply("Kicked: 3 warnings.");
+                    } else reply(`⚠️ Warning ${global.warns[target]}/3`);
                     break;
 
-                case 'groupinfo':
-                    if (!isGroup) return;
-                    reply(`*Group:* ${groupMetadata.subject}\n*Members:* ${groupMetadata.participants.length}\n*Admins:* ${groupAdmins.length}`);
+                case 'unwarn':
+                    if (!isOwner) return;
+                    delete global.warns[target];
+                    reply("✅ User warnings cleared.");
+                    break;
+
+                case 'ai':
+                    if (!q) return reply("Ask me something.");
+                    try {
+                        const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
+                        reply(res.data.success);
+                    } catch { reply("AI Error."); }
+                    break;
+
+                case 'ping':
+                    reply(`⚡ Latency: ${Date.now() - mek.messageTimestamp * 1000}ms`);
+                    break;
+
+                case 'owner':
+                    reply(`Owner Contact: wa.me/${global.owner[0]}`);
                     break;
 
                 case 'time':
                     reply(`🕒 Time: ${moment.tz('America/Port-au-Prince').format('HH:mm:ss')}`);
                     break;
 
-                // --- SECURITY/AUTO COMMANDS ---
-                case 'antilink': case 'antibot': case 'antiwame': case 'antibadword': case 'antidelete':
-                case 'antitagall': case 'antispam': case 'antifake':
-                    if (!isOwner) return;
-                    global.db[command] = !global.db[command];
-                    reply(`🛡️ ${command.toUpperCase()} set to ${global.db[command] ? 'ON ✅' : 'OFF ❌'}`);
+                case 'steal':
+                    if (!quotedMsg?.stickerMessage) return reply("Reply to a sticker.");
+                    const sB = await downloadContentFromMessage(quotedMsg.stickerMessage, 'sticker');
+                    let sBuffer = Buffer.from([]);
+                    for await(const chunk of sB) { sBuffer = Buffer.concat([sBuffer, chunk]); }
+                    client.sendMessage(from, { sticker: sBuffer }, { quoted: mek });
                     break;
 
-                case 'status': case 'settings':
-                    if (!isOwner) return;
-                    let st = `⚙️ *BOT SETTINGS*\n\n`;
-                    for (let key in global.db) { st += `• ${key.toUpperCase()}: ${global.db[key] ? '✅' : '❌'}\n`; }
-                    reply(st);
-                    break;
-
-                // --- UTILITY & FUN ---
-                case 'warn':
-                    if (!isOwner || !isBotAdmin) return;
-                    if (!target) return reply("Tag a user.");
-                    if (!global.warns[target]) global.warns[target] = 0;
-                    global.warns[target] += 1;
-                    if (global.warns[target] >= 3) {
-                        await client.groupParticipantsUpdate(from, [target], "remove");
-                        delete global.warns[target];
-                        reply("Kicked for 3 warnings.");
-                    } else reply(`Warning: ${global.warns[target]}/3`);
-                    break;
-
-                case 'unwarn':
-                    if (!isOwner) return;
-                    global.warns[target] = 0;
-                    reply("Warnings reset.");
-                    break;
-
-                case 'blacklist':
-                    if (!isOwner || !isBotAdmin) return;
-                    await client.groupParticipantsUpdate(from, [target], "remove");
-                    reply("🚫 Blacklisted.");
-                    break;
-
-                case 'ping':
-                    reply(`⚡ Pong! ${Date.now() - mek.messageTimestamp * 1000}ms`);
-                    break;
-
-                case 'ai':
-                    if (!q) return reply("Need query.");
-                    const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                    reply(res.data.success);
-                    break;
-
-                case 'owner':
-                    reply(`Owner: wa.me/${global.owner[0]}`);
+                case 'vv':
+                    if (!quotedMsg?.viewOnceMessageV2) return reply("Not view-once.");
+                    const t = Object.keys(quotedMsg.viewOnceMessageV2.message)[0];
+                    const s = await downloadContentFromMessage(quotedMsg.viewOnceMessageV2.message[t], t.split('Message')[0]);
+                    let vB = Buffer.from([]);
+                    for await(const chunk of s) { vB = Buffer.concat([vB, chunk]); }
+                    client.sendMessage(from, { [t.split('Message')[0]]: vB, caption: '✅ Retreived' }, { quoted: mek });
                     break;
             }
         } catch (e) { console.log(e); }
     });
 }
+
 startHisoka();
+Ready to Go:
