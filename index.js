@@ -3,8 +3,7 @@ const {
     default: goutamConnect, 
     useMultiFileAuthState, 
     makeCacheableSignalKeyStore, 
-    delay,
-    DisconnectReason, 
+    delay, 
     fetchLatestBaileysVersion,
     downloadContentFromMessage
 } = require("@whiskeysockets/baileys");
@@ -23,52 +22,45 @@ const dbPath = path.join(__dirname, 'database.json');
 
 if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
 
-// 💾 PERSISTENT DATABASE
+// 💾 DATABASE
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
         antilink: false, antibot: false, antiwame: false, antitagall: false,
-        antibadword: false, antibadwordnokick: false, antispam: false, 
-        antiban: true, antifake: false, antidelete: false
+        antibadword: false, antispam: false, antifake: false, antidelete: false
     }));
 }
 global.db = JSON.parse(fs.readFileSync(dbPath));
 const saveDB = () => fs.writeFileSync(dbPath, JSON.stringify(global.db, null, 2));
 
-// 🔒 HARDCODED CONFIG
+// 🔒 CONFIG
 const PAIRING_NUMBER = "212701458617"; 
 global.owner = ["212701458617", "85182757527702"]; 
+global.warns = {}; 
+let kickAllConfirm = {};
 const botName = "GSS-BETA";
 const ownerName = "AYANOKOBOT";
-
 const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "masisi", "bouzen", "langet manman w", "santi kk", "gyet manman w", "pouri", "bouda fon", "trip pouri", "koko santi", "kalanbe"];
-global.warns = {}; 
-let kickAllConfirm = {}; 
 
 app.get('/', (req, res) => res.status(200).send('GSS-BETA Online'));
 app.listen(port, "0.0.0.0");
 
 async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const { version } = await fetchLatestBaileysVersion();
-    
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
-        },
-        version,
-        markOnlineOnConnect: true
+        }
     });
 
-    // 📲 PAIRING LOGIC (Hardcoded to your number)
+    client.store = {}; // For Anti-Delete
+
     if (!client.authState.creds.registered) {
         await delay(3000); 
-        try {
-            let code = await client.requestPairingCode(PAIRING_NUMBER);
-            console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE FOR ${PAIRING_NUMBER}: ${code} \n`));
-        } catch (err) { console.log("Pairing error."); }
+        let code = await client.requestPairingCode(PAIRING_NUMBER);
+        console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
     }
 
     client.ev.on("creds.update", saveCreds);
@@ -76,9 +68,12 @@ async function startHisoka() {
     client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
             const mek = chatUpdate.messages[0];
-            if (!mek.message || mek.key.fromMe) return;
-
+            if (!mek.message) return;
             const from = mek.key.remoteJid;
+            client.store[mek.key.id] = mek; // Store message
+
+            if (mek.key.fromMe) return;
+
             const isGroup = from.endsWith('@g.us');
             const sender = mek.key.participant || from;
             const senderNumber = sender.replace(/[^0-9]/g, '');
@@ -93,32 +88,24 @@ async function startHisoka() {
             const isBotAdmin = groupAdmins.includes(client.user.id.split(':')[0] + '@s.whatsapp.net');
             const isSenderAdmin = groupAdmins.includes(sender);
 
-            // 🛡️ SECURITY EXECUTOR (OWNER/ADMINS IMMUNE)
-            if (isGroup && isBotAdmin) {
-                if (isOwner || isSenderAdmin) { 
-                    /* Immune */ 
-                } else {
-                    if (global.db.antilink && (lowerBody.includes("http://") || lowerBody.includes("chat.whatsapp.com"))) {
-                        await client.sendMessage(from, { delete: mek.key });
-                        return await client.groupParticipantsUpdate(from, [sender], "remove");
-                    }
-                    if (global.db.antibadword && badWords.some(w => lowerBody.includes(w))) {
-                        await client.sendMessage(from, { delete: mek.key });
-                        return await client.groupParticipantsUpdate(from, [sender], "remove");
-                    }
+            // 🛡️ SECURITY
+            if (isGroup && isBotAdmin && !isOwner && !isSenderAdmin) {
+                if (global.db.antilink && lowerBody.includes("chat.whatsapp.com")) {
+                    await client.sendMessage(from, { delete: mek.key });
+                    return client.groupParticipantsUpdate(from, [sender], "remove");
                 }
             }
 
-            // ⌨️ COMMANDS
             if (!body.startsWith(".")) return;
             const args = body.slice(1).trim().split(/ +/);
             const command = args.shift().toLowerCase();
             const q = args.join(" ");
-            const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const readMore = String.fromCharCode(8206).repeat(4001);
             const quotedMsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
             let target = mentioned[0] || (quotedMsg ? mek.message.extendedTextMessage.contextInfo.participant : null);
 
-            const readMore = String.fromCharCode(8206).repeat(4001);
+            console.log(chalk.cyan(`[COMMAND] .${command} | User: ${senderNumber}`));
 
             switch (command) {
                 case 'menu':
@@ -144,64 +131,81 @@ ${readMore}
 │
 ├─『 *Utility & Fun* 』
 │ .ping | .ai | .vv | .owner | .steal
-│ .warn | .unwarn | .blacklist | .settings | .backup
-╰───────────────────`;
-                    await client.sendMessage(from, { 
-                        video: { url: 'https://media.giphy.com/media/Uau9JUChC8FdZnmVmX/giphy.mp4' }, 
-                        caption: menuMsg, 
-                        gifPlayback: true 
-                    });
+│ .warn | .unwarn | .blacklist | .settings | .backup`;
+                    reply(menuMsg);
                     break;
 
-                case 'kickall':
-                    if (!isOwner) return reply("Owner Only.");
-                    kickAllConfirm[from] = true;
-                    reply("⚠️ Type *.confirm* to wipe the group.");
-                    setTimeout(() => { delete kickAllConfirm[from]; }, 30000);
-                    break;
-
-                case 'confirm':
-                    if (!isOwner || !kickAllConfirm[from]) return;
-                    for (let mem of groupMetadata.participants) {
-                        if (!global.owner.includes(mem.id.split('@')[0]) && mem.id !== client.user.id.split(':')[0] + '@s.whatsapp.net') {
-                            await client.groupParticipantsUpdate(from, [mem.id], "remove");
-                            await delay(500);
-                        }
-                    }
-                    delete kickAllConfirm[from];
-                    reply("✅ Group Cleared.");
+                case 'tagall': case 'hidetag':
+                    if (!isGroup || !isSenderAdmin) return reply("❌ Admin only.");
+                    client.sendMessage(from, { text: q ? q : '📢 Attention', mentions: groupMetadata.participants.map(v => v.id) });
                     break;
 
                 case 'kick': case 'add': case 'promote': case 'demote':
-                    if (!isOwner) return reply("Owner Only.");
-                    if (!isBotAdmin) return reply("Bot is not Admin.");
-                    let user = command === 'add' ? q.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : target;
-                    let action = command === 'kick' ? 'remove' : (command === 'add' ? 'add' : command);
-                    await client.groupParticipantsUpdate(from, [user], action);
+                    if (!isBotAdmin) return reply("❌ Bot is not Admin.");
+                    if (!isSenderAdmin && !isOwner) return reply("❌ Admin only.");
+                    let u = command === 'add' ? q.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : target;
+                    if (!u) return reply("❓ Reply or Tag user.");
+                    await client.groupParticipantsUpdate(from, [u], command === 'kick' ? 'remove' : (command === 'add' ? 'add' : command));
                     reply("✅ Done.");
                     break;
 
-                case 'backup':
-                    if (!isOwner) return;
-                    await client.sendMessage(sender, { document: fs.readFileSync(dbPath), fileName: 'database.json', mimetype: 'application/json' });
-                    reply("📂 Database sent to your private chat.");
+                case 'mute': case 'unmute':
+                    if (!isSenderAdmin) return reply("❌ Admin only.");
+                    await client.groupUpdateSubject(from, command === 'mute' ? "announcement" : "not_announcement");
+                    reply(`✅ Group ${command}d.`);
+                    break;
+
+                case 'steal': case 'vv':
+                    if (!quotedMsg) return reply("❌ Reply to a View-Once.");
+                    const type = Object.keys(quotedMsg)[0];
+                    const stream = await downloadContentFromMessage(quotedMsg[type], type.replace('Message', ''));
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
+                    client.sendMessage(from, { [type.replace('Message', '')]: buffer, caption: "✅ Stolen" }, { quoted: mek });
+                    break;
+
+                case 'ai':
+                    if (!q) return reply("❓ Ask something.");
+                    const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
+                    reply(`🤖 ${res.data.success}`);
                     break;
 
                 case 'status':
-                    let s = `⚙️ *SETTINGS*\n\n`;
-                    for (let key in global.db) { s += `${global.db[key] ? '✅' : '❌'} ${key.toUpperCase()}\n`; }
+                    let s = `⚙️ *CONFIG*\n`;
+                    for (let key in global.db) s += `${global.db[key] ? '✅' : '❌'} ${key.toUpperCase()}\n`;
                     reply(s);
                     break;
 
+                case 'antilink': case 'antidelete': case 'antibot':
+                    if (!isOwner) return reply("❌ Owner only.");
+                    global.db[command] = !global.db[command];
+                    saveDB();
+                    reply(`✅ ${command} is ${global.db[command] ? "ON" : "OFF"}`);
+                    break;
+
                 case 'ping':
-                    reply(`⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms`);
+                    reply(`⚡ ${Date.now() - mek.messageTimestamp * 1000}ms`);
                     break;
             }
-        } catch (e) { console.log(e); }
+        } catch (e) { console.log(chalk.red(e)); }
+    });
+
+    // 🕵️ ANTI-DELETE HANDLER
+    client.ev.on("messages.update", async (chatUpdate) => {
+        for (const { key, update } of chatUpdate) {
+            if (update.protocolMessage?.type === 3 && global.db.antidelete) {
+                const msg = client.store[update.protocolMessage.key.id];
+                if (!msg) return;
+                const sender = msg.key.participant || msg.key.remoteJid;
+                let report = `🕵️ *ANTI-DELETE*\n👤 From: @${sender.split('@')[0]}`;
+                await client.sendMessage(client.user.id, { text: report, mentions: [sender] });
+                await client.sendMessage(client.user.id, { forward: msg });
+            }
+        }
     });
 
     client.ev.on("connection.update", (up) => {
-        if (up.connection === "open") console.log(chalk.green("✅ DEPLOYED"));
+        if (up.connection === "open") console.log(chalk.green("✅ GSS-BETA ONLINE"));
         if (up.connection === "close") startHisoka();
     });
 }
