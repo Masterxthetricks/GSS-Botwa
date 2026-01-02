@@ -78,14 +78,33 @@ async function startHisoka() {
         }
     }
 
-    // 🛡️ ANTI-FAKE LOGIC (Auto-kick foreign numbers on Join)
+   // 🛡️ ADVANCED ANTI-FAKE & ANTI-BOT LOGIC
     client.ev.on("group-participants.update", async (anu) => {
-        if (global.db.antifake && anu.action === 'add') {
-            for (let num of anu.participants) {
-                // If the joining number doesn't start with the local prefix (e.g., 212)
-                if (!num.startsWith("212")) { 
-                    await client.groupParticipantsUpdate(anu.id, [num], "remove");
-                }
+        if (!global.db.antifake || anu.action !== 'add') return;
+
+        for (let num of anu.participants) {
+            const userId = num.split('@')[0];
+            
+            // 1. Kick Common Virtual Number Countries (USA +1, etc.) 
+            // 2. Or numbers NOT starting with your trusted prefix (212)
+            const isVirtual = userId.startsWith("1") || userId.startsWith("44"); 
+            const isNotTrusted = !userId.startsWith("212"); 
+
+            // 3. Bot Keyword Detection (If number contains specific "bot" patterns)
+            const isBotPattern = /bot/i.test(userId) || userId.length > 15; 
+
+            if (isVirtual || isNotTrusted || isBotPattern) {
+                // Skip if it's the owner trying to join
+                if (global.owner.includes(userId)) continue;
+
+                console.log(chalk.red.bold(`🛡️ Kicking suspicious member: ${userId}`));
+                
+                await client.sendMessage(anu.id, { 
+                    text: `🛡️ *Security System*: @${userId} detected as a Fake/Bot number and removed.`, 
+                    mentions: [num] 
+                });
+
+                await client.groupParticipantsUpdate(anu.id, [num], "remove");
             }
         }
     });
