@@ -20,7 +20,6 @@ const dbPath = path.join(__dirname, 'database.json');
 
 if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
 
-// 💾 DATABASE INITIALIZATION
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
         antilink: false, antibot: false, antiwame: false, antitagall: false,
@@ -60,6 +59,8 @@ async function startHisoka() {
         mobile: false, 
         connectTimeoutMs: 60000, 
         keepAliveIntervalMs: 30000,
+        syncFullHistory: false, // 🚀 Faster linking
+        maxMsgRetryCount: 1
     });
 
     if (!client.authState.creds.registered) {
@@ -87,10 +88,9 @@ async function startHisoka() {
             const sender = mek.key.participant || from;
             const senderNumber = sender.replace(/[^0-9]/g, '');
             
-            // 🔒 OWNER CHECK
+            // 🔒 STRICT OWNER CHECK
             const isOwner = global.owner.includes(senderNumber) || global.db.whitelist.includes(senderNumber);
             const botNumber = client.user.id.split(':')[0] + '@s.whatsapp.net';
-            
             const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
             const lowerBody = body.toLowerCase();
             const reply = (text) => client.sendMessage(from, { text }, { quoted: mek });
@@ -98,8 +98,7 @@ async function startHisoka() {
             const groupMetadata = isGroup ? await client.groupMetadata(from) : null;
             const isBotAdmin = isGroup ? groupMetadata.participants.find(v => v.id == botNumber)?.admin : false;
 
-            // 🛡️ SECURITY AUTO-LOGIC
-            if (global.db.antiban && !isOwner) { await delay(500); }
+            // 🛡️ AUTO-SECURITY (Deletes for everyone, but Owner/Admin bypass)
             if (isGroup && isBotAdmin && !isOwner) {
                 if (global.db.antilink && lowerBody.includes("chat.whatsapp.com")) {
                     await client.sendMessage(from, { delete: mek.key });
@@ -110,7 +109,7 @@ async function startHisoka() {
                 }
             }
 
-            // 🛑 COMMAND LOCK
+            // 🛑 COMMAND LOCK (Only Owner executes)
             if (!body.startsWith(".") || !isOwner) return;
 
             const args = body.slice(1).trim().split(/ +/);
@@ -149,20 +148,17 @@ async function startHisoka() {
                     }, { quoted: mek });
                     break;
 
-                // ────『 Admin & Group (EXECUTABLE) 』────
                 case 'add':
                 case 'promote':
                 case 'demote':
-                    if (!isGroup || !isBotAdmin) return reply("Bot must be Admin.");
+                    if (!isGroup || !isBotAdmin) return;
                     let u = command === 'add' ? q.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : target;
-                    if (!u) return reply("Target missing.");
                     await client.groupParticipantsUpdate(from, [u], command === 'add' ? 'add' : command);
-                    reply(`✅ Done.`);
+                    reply(`✅ Executed.`);
                     break;
 
                 case 'kick':
-                    if (!isGroup || !isBotAdmin) return;
-                    if (!target) return reply("Reply or tag.");
+                    if (!isGroup || !isBotAdmin || !target) return;
                     await client.groupParticipantsUpdate(from, [target], "remove");
                     break;
 
@@ -170,59 +166,35 @@ async function startHisoka() {
                 case 'unmute':
                     if (!isGroup || !isBotAdmin) return;
                     await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
-                    reply(`✅ Group ${command}d.`);
+                    reply(`✅ Done.`);
                     break;
 
                 case 'kickall':
                     const all = groupMetadata.participants.filter(v => !global.owner.includes(v.id.split('@')[0]) && v.id !== botNumber);
-                    reply("🚀 Cleaning group...");
-                    for (let mem of all) { 
-                        await client.groupParticipantsUpdate(from, [mem.id], "remove"); 
-                        await delay(500); 
-                    }
-                    break;
-
-                case 'tagall':
-                case 'hidetag':
-                    let teks = q ? q : "📢 Attention!";
-                    client.sendMessage(from, { text: teks, mentions: groupMetadata.participants.map(a => a.id) });
-                    break;
-
-                // ────『 Security (EXECUTABLE TOGGLES) 』────
-                case 'antilink':
-                case 'antibot':
-                case 'antifake':
-                case 'antibadword':
-                case 'antiban':
-                case 'automute':
-                    global.db[command] = !global.db[command];
-                    saveDB();
-                    reply(`✅ ${command.toUpperCase()}: ${global.db[command] ? 'ON' : 'OFF'}`);
+                    for (let mem of all) { await client.groupParticipantsUpdate(from, [mem.id], "remove"); await delay(500); }
                     break;
 
                 case 'status':
-                    let stat = `⚙️ *SYSTEM STATUS*\n\n`;
-                    for (let key in global.db) { if (typeof global.db[key] === 'boolean') stat += `${global.db[key] ? '✅' : '❌'} ${key.toUpperCase()}\n`; }
-                    reply(stat);
+                    let s = `⚙️ *SYSTEM STATUS*\n\n`;
+                    for (let key in global.db) { if (typeof global.db[key] === 'boolean') s += `${global.db[key] ? '✅' : '❌'} ${key.toUpperCase()}\n`; }
+                    reply(s);
                     break;
 
-                // ────『 Utility 』────
+                case 'antiban':
+                case 'antilink':
+                case 'antibadword':
+                    global.db[command] = !global.db[command];
+                    saveDB();
+                    reply(`⚙️ ${command.toUpperCase()}: ${global.db[command] ? 'ON' : 'OFF'}`);
+                    break;
+
                 case 'ping':
                     reply(`⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms`);
                     break;
 
-                case 'ai':
-                    const aiRes = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                    reply(`🤖 AI: ${aiRes.data.success}`);
-                    break;
-
                 case 'owner':
-                    const vcard = 'BEGIN:VCARD\nVERSION:3.0\nFN:' + ownerName + '\nTEL;type=CELL;type=VOICE;waid=' + global.owner[0] + ':+' + global.owner[0] + '\nEND:VCARD';
+                    const vcard = 'BEGIN:VCARD\nVERSION:3.0\nFN:' + ownerName + '\nTEL;waid=' + global.owner[0] + ':+' + global.owner[0] + '\nEND:VCARD';
                     client.sendMessage(from, { contacts: { displayName: ownerName, contacts: [{ vcard }] } });
-                    break;
-
-                case 'backup':
-                    await client.sendMessage(from, { document: fs.readFileSync(dbPath), fileName: 'database.json', mimetype: 'application/json' });
                     break;
             }
         } catch (e) { console.error(e); }
