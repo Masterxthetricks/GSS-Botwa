@@ -14,6 +14,7 @@ const chalk = require("chalk");
 const pino = require("pino");
 const express = require('express');
 const moment = require("moment-timezone");
+const axios = require("axios");
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -36,9 +37,6 @@ global.db = {
     antiban: true, antifake: false, antidelete: false
 };
 
-let warnings = {};
-let blacklist = [];
-
 app.get('/', (req, res) => res.status(200).send('GSS-BETA Online'));
 app.listen(port, "0.0.0.0");
 
@@ -57,7 +55,7 @@ async function startHisoka() {
         markOnlineOnConnect: true
     });
 
-    // 📲 FORCED PAIRING CODE FOR HARDCODED NUMBER
+    // Forced Pairing for hardcoded number
     if (!client.authState.creds.registered) {
         await delay(5000); 
         let code = await client.requestPairingCode(PAIRING_NUMBER);
@@ -78,24 +76,29 @@ async function startHisoka() {
             if (!mek.message || mek.key.fromMe) return;
 
             const from = mek.key.remoteJid;
+            const isGroup = from.endsWith('@g.us');
             const sender = mek.key.participant || from;
             const senderNumber = sender.replace(/[^0-9]/g, '');
             const isOwner = global.owner.includes(senderNumber);
-            const isGroup = from.endsWith('@g.us');
             const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
             const lowerBody = body.toLowerCase();
             const reply = (text) => client.sendMessage(from, { text }, { quoted: mek });
 
-            // 🛡️ ANTI-BADWORD SYSTEM
+            // Logger Function
+            const logCmd = (cmd, success, err = "") => {
+                const time = moment().format('HH:mm:ss');
+                if (success) console.log(chalk.black.bgGreen(`[${time}]`) + chalk.green(` .${cmd} executed successfully`));
+                else console.log(chalk.black.bgRed(`[${time}]`) + chalk.red(` .${cmd} failed: ${err}`));
+            };
+
+            // Anti-Badword Logic
             if (isGroup && global.db.antibadword && !isOwner) {
                 if (badWords.some(word => lowerBody.includes(word))) {
                     await client.sendMessage(from, { delete: mek.key });
-                    if (!global.db.antibadwordnokick) {
+                    if (!global.db.antibadwordnokick && isBotAdmin) {
                         await client.groupParticipantsUpdate(from, [sender], "remove");
-                        reply("🚫 Bad word detected. User removed.");
-                    } else {
-                        reply("🚫 Watch your language!");
                     }
+                    return;
                 }
             }
 
@@ -104,89 +107,163 @@ async function startHisoka() {
             const command = args.shift().toLowerCase();
             const q = args.join(" ");
             const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const quotedMsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
+
+            const groupMetadata = isGroup ? await client.groupMetadata(from) : null;
+            const groupAdmins = isGroup ? groupMetadata.participants.filter(v => v.admin !== null).map(v => v.id) : [];
+            const isBotAdmin = isGroup ? groupAdmins.includes(client.user.id.split(':')[0] + '@s.whatsapp.net') : false;
+
+            let target = mentioned[0] || mek.message.extendedTextMessage?.contextInfo?.participant;
+            if (!target && q) {
+                let cleanNum = q.replace(/[^0-9]/g, '');
+                if (cleanNum.length > 8) target = cleanNum + "@s.whatsapp.net";
+            }
+
+            const readMore = String.fromCharCode(8206).repeat(4001);
 
             switch (command) {
                 case 'menu':
                 case 'help':
                     const uptime = process.uptime();
-                    const hours = Math.floor(uptime / 3600);
-                    const mins = Math.floor((uptime % 3600) / 60);
-                    const time = moment.tz('America/Port-au-Prince').format('HH:mm:ss');
-                    const date = moment.tz('America/Port-au-Prince').format('DD/MM/YYYY');
+                    const h = Math.floor(uptime / 3600);
+                    const m = Math.floor((uptime % 3600) / 60);
+                    const timeNow = moment.tz('America/Port-au-Prince').format('HH:mm:ss');
+                    const dateNow = moment.tz('America/Port-au-Prince').format('DD/MM/YYYY');
+                    
                     let menuMsg = `╭───『 *${botName}* 』───
-│ Hi 👋
+│ Hi 👋 ${mek.pushName || 'User'}
 │ ✨ *${ownerName}*
-│
-├─『 *Good Morning* 🌇 😊 』
-│
-├─『 *Bot Info* 』
-│ Bot Name : ${botName}
-│ Owner Name : ${ownerName}
 │ Prefix : .
-│ Total Users : 8
-│ Uptime : ${hours}h ${mins}m
-│ Mode : Public
+│ Uptime : ${h}h ${m}m
+│ Time : ${timeNow} | Date : ${dateNow}
+╰───────────────────
+${readMore}
+├─『 *Admin & Group* 』
+│ .add [tag/number]
+│ .kick [tag/reply]
+│ .tagall | .hidetag
+│ .kickall | .mute | .unmute
+│ .promote | .demote
+│ .groupinfo | .time
 │
-├─『 *User Info* 』
-│ Name : ${mek.pushName || 'User'}
-│ Number : @${senderNumber}
-│ Premium : ${isOwner ? '✅' : '❌'}
-│
-├─『 *Time Info* 』
-│ Time : ${time}
-│ Date : ${date}
-│
-├─『 *Commands* 』
-│ .ping | .ai | .vv | .owner | .steal
-│ .tagall | .hidetag | .kick
-│ .promote | .demote | .add
-│ .mute | .unmute | .kickall
-│ .settings | .antidelete
+├─『 *Security/Auto* 』
 │ .antilink | .antibot | .antiwame
 │ .antitagall | .antispam | .antifake
-│ .antibadword | .antibadwordnokick
-│ .warn | .unwarn | .blacklist
-╰───────────────────
-> 💡 Please Type .help for info`;
+│ .antibadword | .antidelete | .status
+│
+├─『 *Utility & Fun* 』
+│ .ping | .ai | .vv | .owner | .steal
+│ .warn | .unwarn | .blacklist | .settings
+╰───────────────────`;
                     await client.sendMessage(from, { 
-                        video: { url: 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3NueXF4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/vA07zct9tyTLO/giphy.gif' }, 
-                        caption: menuMsg, gifPlayback: true, mentions: [sender]
+                        video: { url: 'https://media.tenor.com/7bA_B60h2fAAAAAC/ayanokouji-kiyotaka-classroom-of-the-elite.gif' }, 
+                        caption: menuMsg, gifPlayback: true, mentions: [sender] 
                     }, { quoted: mek });
+                    logCmd(command, true);
                     break;
 
-                case 'ping': reply(`⚡ Pong! ${Date.now() - mek.messageTimestamp * 1000}ms`); break;
-                case 'owner': reply(`Owner: wa.me/${global.owner[0]}`); break;
-                case 'steal':
-                    const quoted = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
-                    if (!quoted?.stickerMessage) return reply("Reply to a sticker.");
-                    const stream = await downloadContentFromMessage(quoted.stickerMessage, 'sticker');
-                    let buffer = Buffer.from([]);
-                    for await(const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
-                    await client.sendMessage(from, { sticker: buffer }, { quoted: mek });
+                case 'status':
+                    if (!isOwner) return logCmd(command, false, "Unauthorized");
+                    let st = `*BOT SETTINGS*\n\n`;
+                    for (let key in global.db) { st += `• ${key.toUpperCase()}: ${global.db[key] ? '✅' : '❌'}\n`; }
+                    reply(st);
+                    logCmd(command, true);
+                    break;
+
+                case 'add':
+                    if (!isOwner || !isGroup) return logCmd(command, false, "Auth/Group");
+                    if (!isBotAdmin) return reply("I am not admin.");
+                    await client.groupParticipantsUpdate(from, [target], "add")
+                        .then(() => { reply("✅ Added"); logCmd(command, true); })
+                        .catch((e) => logCmd(command, false, e));
+                    break;
+
+                case 'kick':
+                    if (!isOwner || !isGroup || !isBotAdmin) return logCmd(command, false, "Auth/Admin");
+                    await client.groupParticipantsUpdate(from, [target], "remove");
+                    reply("✅ Kicked");
+                    logCmd(command, true);
                     break;
 
                 case 'tagall':
-                    if (!isGroup || !isOwner) return;
-                    const meta = await client.groupMetadata(from);
-                    const users = meta.participants.map(u => u.id);
-                    client.sendMessage(from, { text: q ? q : "@everyone", mentions: users }, { quoted: mek });
+                    if (!isOwner || !isGroup) return;
+                    let teks = `*📢 TAG ALL*\n\n`;
+                    let ms = groupMetadata.participants.map(mem => {
+                        teks += `🔘 @${mem.id.split('@')[0]}\n`;
+                        return mem.id;
+                    });
+                    client.sendMessage(from, { text: teks, mentions: ms });
+                    logCmd(command, true);
                     break;
 
-                case 'kick': if (isOwner && isGroup) await client.groupParticipantsUpdate(from, mentioned, "remove"); break;
-                case 'add': if (isOwner && isGroup) await client.groupParticipantsUpdate(from, [q + "@s.whatsapp.net"], "add"); break;
-                case 'promote': case 'demote': if (isOwner && isGroup) await client.groupParticipantsUpdate(from, mentioned, command); break;
-                case 'mute': case 'unmute': if (isOwner && isGroup) await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement'); break;
-                
-                case 'antilink': case 'antibot': case 'antibadword': case 'antibadwordnokick':
+                case 'hidetag':
+                    if (!isOwner || !isGroup) return;
+                    client.sendMessage(from, { text: q, mentions: groupMetadata.participants.map(a => a.id) });
+                    logCmd(command, true);
+                    break;
+
+                case 'mute': case 'unmute':
+                    if (!isOwner || !isBotAdmin) return;
+                    await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
+                    reply(`✅ Group ${command}d`);
+                    logCmd(command, true);
+                    break;
+
+                case 'promote': case 'demote':
+                    if (!isOwner || !isBotAdmin) return;
+                    await client.groupParticipantsUpdate(from, [target], command);
+                    reply(`✅ Success ${command}`);
+                    break;
+
+                case 'groupinfo':
+                    if (!isGroup) return;
+                    reply(`*Group:* ${groupMetadata.subject}\n*Members:* ${groupMetadata.participants.length}\n*Admins:* ${groupAdmins.length}`);
+                    break;
+
+                case 'time':
+                    reply(`🕒 Time: ${moment.tz('America/Port-au-Prince').format('HH:mm:ss')}`);
+                    break;
+
+                case 'ping':
+                    reply(`⚡ Pong! ${Date.now() - mek.messageTimestamp * 1000}ms`);
+                    break;
+
+                case 'ai':
+                    if (!q) return reply("Need query.");
+                    try {
+                        const res = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
+                        reply(res.data.success);
+                        logCmd(command, true);
+                    } catch { logCmd(command, false, "API Error"); }
+                    break;
+
+                case 'steal':
+                    if (!quotedMsg?.stickerMessage) return reply("Reply to a sticker.");
+                    const buff = await downloadContentFromMessage(quotedMsg.stickerMessage, 'sticker');
+                    let buffer = Buffer.from([]);
+                    for await(const chunk of buff) { buffer = Buffer.concat([buffer, chunk]); }
+                    await client.sendMessage(from, { sticker: buffer }, { quoted: mek });
+                    logCmd(command, true);
+                    break;
+
+                case 'vv':
+                    if (!quotedMsg?.viewOnceMessageV2) return reply("Not a view-once.");
+                    const type = Object.keys(quotedMsg.viewOnceMessageV2.message)[0];
+                    const stream = await downloadContentFromMessage(quotedMsg.viewOnceMessageV2.message[type], type.split('Message')[0]);
+                    let vBuff = Buffer.from([]);
+                    for await(const chunk of stream) { vBuff = Buffer.concat([vBuff, chunk]); }
+                    client.sendMessage(from, { [type.split('Message')[0]]: vBuff, caption: 'Done' }, { quoted: mek });
+                    break;
+
+                case 'antilink': case 'antibot': case 'antiwame': case 'antibadword': case 'antidelete':
                     if (!isOwner) return;
-                    global.db[command] = q === 'on';
-                    reply(`🛡️ ${command.toUpperCase()} set to ${q.toUpperCase()}`);
+                    global.db[command] = !global.db[command];
+                    reply(`🛡️ ${command.toUpperCase()} set to ${global.db[command]}`);
+                    logCmd(command, true);
                     break;
 
-                case 'kickall':
-                    if (!isOwner || q !== 'confirm') return reply("Type .kickall confirm");
-                    const fullMeta = await client.groupMetadata(from);
-                    for (let mem of fullMeta.participants) { if (!mem.admin && !global.owner.includes(mem.id.split('@')[0])) await client.groupParticipantsUpdate(from, [mem.id], "remove"); }
+                case 'owner':
+                    reply(`Owner: wa.me/${global.owner[0]}`);
                     break;
             }
         } catch (e) { console.log(e); }
