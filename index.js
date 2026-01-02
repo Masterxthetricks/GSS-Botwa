@@ -26,9 +26,22 @@ if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }
 // 💾 PERSISTENT DATABASE
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
-        antilink: false, antibot: false, antiwame: false, antitagall: false,
-        antibadword: false, antispam: false, antifake: false, antidelete: false
-    }));
+        antilink: false, 
+        antibot: false, 
+        antiwame: false, 
+        antitagall: false,
+        antibadword: false, 
+        antispam: false, 
+        antifake: false, 
+        antidelete: false,
+        autotyping: false,
+        autorecord: false,
+        autoread: false,
+        onlygroup: false,
+        onlypc: false,
+        welcome: false,
+        goodbye: false
+    }, null, 2));
 }
 global.db = JSON.parse(fs.readFileSync(dbPath));
 const saveDB = () => fs.writeFileSync(dbPath, JSON.stringify(global.db, null, 2));
@@ -47,18 +60,20 @@ app.listen(port, "0.0.0.0");
 
 async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
     
     const client = goutamConnect({
+        version,
         logger: pino({ level: "silent" }),
-        // Fixed 405 by using a modern desktop browser string
-        browser: ["Mac OS", "Chrome", "121.0.6167.184"], 
+        browser: ["Ubuntu", "Chrome", "110.0.5481.178"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
+        printQRInTerminal: false,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 30000,
+        keepAliveIntervalMs: 10000,
     });
 
     client.store = {}; 
@@ -71,9 +86,9 @@ async function startHisoka() {
             console.log(chalk.green.bold("\n✅ GSS-BETA SYSTEM ONLINE\n"));
             
             if (!client.authState.creds.registered) {
-                console.log(chalk.yellow("📡 Handshake successful. Waiting 8s for pairing code..."));
+                console.log(chalk.yellow("📡 Handshake successful. Waiting for pairing code..."));
                 try {
-                    await delay(8000); 
+                    await delay(10000); 
                     let code = await client.requestPairingCode(PAIRING_NUMBER);
                     console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
                 } catch (err) {
@@ -86,10 +101,9 @@ async function startHisoka() {
             const reason = lastDisconnect?.error?.output?.statusCode;
             console.log(chalk.red(`⚠️ Connection Closed. Reason: ${reason}`));
 
-            // Recovery for 405 (Method Not Allowed) or 401 (Unauthorized)
             if (reason === 405 || reason === 401 || reason === DisconnectReason.restartRequired) {
                 console.log(chalk.bgMagenta("🔄 Resetting session to bypass 405..."));
-                await delay(5000);
+                await delay(10000);
                 startHisoka();
             } else if (reason !== DisconnectReason.loggedOut) {
                 startHisoka();
@@ -163,7 +177,7 @@ ${readMore}
 │ .antitagall | .antispam | .antifake
 │ .antibadword | .antidelete | .status
 │
-├─『 *Utility & Fun* 』
+├──『 *Utility & Fun* 』
 │ .ping | .ai | .vv | .owner | .steal
 │ .warn | .unwarn | .blacklist | .settings | .backup`;
                     reply(menuMsg);
@@ -211,10 +225,12 @@ ${readMore}
                     break;
 
                 case 'antilink': case 'antidelete': case 'antibot':
+                case 'autotyping': case 'autorecord': case 'autoread':
+                case 'welcome': case 'goodbye':
                     if (!isOwner) return reply("❌ Owner only.");
                     global.db[command] = !global.db[command];
                     saveDB();
-                    reply(`✅ ${command} is ${global.db[command] ? "ON" : "OFF"}`);
+                    reply(`✅ ${command} is now ${global.db[command] ? "ON" : "OFF"}`);
                     break;
 
                 case 'ping':
