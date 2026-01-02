@@ -44,6 +44,7 @@ async function startHisoka() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
     
+    // 🛠️ OPTIMIZED CONNECTION SETTINGS
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"], 
@@ -52,14 +53,26 @@ async function startHisoka() {
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         version,
-        markOnlineOnConnect: true
+        markOnlineOnConnect: true,
+        connectTimeoutMs: 60000, // Wait 60s for connection
+        defaultQueryTimeoutMs: 0, // Disable timeout for queries to prevent 408
+        keepAliveIntervalMs: 10000
     });
 
-    // Forced Pairing for hardcoded number
+    // 📲 SMART PAIRING LOGIC WITH RETRY
     if (!client.authState.creds.registered) {
-        await delay(5000); 
-        let code = await client.requestPairingCode(PAIRING_NUMBER);
-        console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE FOR ${PAIRING_NUMBER}: ${code} \n`));
+        await delay(3000); 
+        const phoneNumber = PAIRING_NUMBER.replace(/[^0-9]/g, '');
+        
+        try {
+            let code = await client.requestPairingCode(phoneNumber);
+            console.log(chalk.white.bgRed.bold(`\n 📲 NEW PAIRING CODE FOR ${phoneNumber}: ${code} \n`));
+        } catch (err) {
+            console.log(chalk.red.bold("❌ Pairing Request Failed. Retrying..."));
+            await delay(10000);
+            let code = await client.requestPairingCode(phoneNumber);
+            console.log(chalk.white.bgRed.bold(`\n 📲 RETRY PAIRING CODE: ${code} \n`));
+        }
     }
 
     client.ev.on("connection.update", (update) => {
@@ -91,6 +104,10 @@ async function startHisoka() {
                 else console.log(chalk.black.bgRed(`[${time}]`) + chalk.red(` .${cmd} failed: ${err}`));
             };
 
+            const groupMetadata = isGroup ? await client.groupMetadata(from) : null;
+            const groupAdmins = isGroup ? groupMetadata.participants.filter(v => v.admin !== null).map(v => v.id) : [];
+            const isBotAdmin = isGroup ? groupAdmins.includes(client.user.id.split(':')[0] + '@s.whatsapp.net') : false;
+
             // Anti-Badword Logic
             if (isGroup && global.db.antibadword && !isOwner) {
                 if (badWords.some(word => lowerBody.includes(word))) {
@@ -108,10 +125,6 @@ async function startHisoka() {
             const q = args.join(" ");
             const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
             const quotedMsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
-
-            const groupMetadata = isGroup ? await client.groupMetadata(from) : null;
-            const groupAdmins = isGroup ? groupMetadata.participants.filter(v => v.admin !== null).map(v => v.id) : [];
-            const isBotAdmin = isGroup ? groupAdmins.includes(client.user.id.split(':')[0] + '@s.whatsapp.net') : false;
 
             let target = mentioned[0] || mek.message.extendedTextMessage?.contextInfo?.participant;
             if (!target && q) {
