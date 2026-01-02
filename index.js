@@ -4,6 +4,7 @@ const {
     useMultiFileAuthState, 
     makeCacheableSignalKeyStore, 
     delay, 
+    DisconnectReason,
     fetchLatestBaileysVersion,
     downloadContentFromMessage
 } = require("@whiskeysockets/baileys");
@@ -52,36 +53,40 @@ async function startHisoka() {
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
-        }
+        },
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0,
     });
 
-    client.store = {}; // For Anti-Delete
+    client.store = {}; 
 
-    // 📲 IMPROVED PAIRING LOGIC (INTEGRATED)
-    if (!client.authState.creds.registered) {
-        console.log(chalk.yellow("⏳ Waiting 10 seconds for stable connection before requesting code..."));
-        await delay(10000); // Increased delay for Koyeb network stability
-        
-        let retryCount = 0;
-        const maxRetries = 5;
+    // 📲 EVENT-DRIVEN PAIRING LOGIC
+    client.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
 
-        async function getPairingCode() {
-            try {
-                let code = await client.requestPairingCode(PAIRING_NUMBER);
-                console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
-            } catch (err) {
-                if (retryCount < maxRetries) {
-                    retryCount++;
-                    console.log(chalk.red(`❌ Pairing failed (Attempt ${retryCount}/${maxRetries}). Retrying in 5s...`));
-                    await delay(5000);
-                    return getPairingCode();
-                } else {
-                    console.log(chalk.bgRed("🚨 Max retries reached. Please restart the Koyeb service."));
+        if (connection === "open") {
+            console.log(chalk.green.bold("\n✅ GSS-BETA CONNECTED TO WHATSAPP\n"));
+            
+            if (!client.authState.creds.registered) {
+                console.log(chalk.yellow("📡 Connection verified. Requesting pairing code..."));
+                try {
+                    await delay(5000); 
+                    let code = await client.requestPairingCode(PAIRING_NUMBER);
+                    console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE: ${code} \n`));
+                } catch (err) {
+                    console.log(chalk.red("❌ Pairing request failed. Please restart Koyeb."));
                 }
             }
         }
-        await getPairingCode();
-    }
+
+        if (connection === "close") {
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            console.log(chalk.red(`Connection closed. Reason: ${reason}`));
+            if (reason !== DisconnectReason.loggedOut) {
+                startHisoka();
+            }
+        }
+    });
 
     client.ev.on("creds.update", saveCreds);
 
@@ -222,11 +227,6 @@ ${readMore}
                 await client.sendMessage(client.user.id, { forward: msg });
             }
         }
-    });
-
-    client.ev.on("connection.update", (up) => {
-        if (up.connection === "open") console.log(chalk.green("✅ GSS-BETA ONLINE"));
-        if (up.connection === "close") startHisoka();
     });
 }
 startHisoka();
