@@ -3,32 +3,32 @@ const {
     default: goutamConnect, 
     useMultiFileAuthState, 
     makeCacheableSignalKeyStore, 
-    downloadContentFromMessage, 
     delay,
-    DisconnectReason,
-    fetchLatestBaileysVersion
+    DisconnectReason, 
+    fetchLatestBaileysVersion,
+    downloadContentFromMessage
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
 const chalk = require("chalk");
 const pino = require("pino");
 const express = require('express');
-const axios = require('axios');
 const moment = require("moment-timezone");
 
 const app = express();
 const port = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'session');
 
-if (!fs.existsSync(sessionPath)) { 
-    fs.mkdirSync(sessionPath, { recursive: true }); 
-}
+if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
 
-// 🔒 HARDCODED CONFIGURATION
+// 🔒 HARDCODED CONFIG
 const PAIRING_NUMBER = "212701458617"; 
 global.owner = ["212701458617", "85182757527702"]; 
 const botName = "GSS-BETA";
 const ownerName = "AYANOKOBOT";
+
+// 🚫 BAD WORDS LIST
+const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "masisi", "bouzen", "langet manman w", "santi kk", "gyet manman w", "pouri", "bouda fon", "trip pouri", "koko santi", "kalanbe"];
 
 global.db = {
     antilink: false, antibot: false, antiwame: false, antitagall: false,
@@ -36,13 +36,10 @@ global.db = {
     antiban: true, antifake: false, antidelete: false
 };
 
-const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "masisi", "bouzen", "langet manman w", "santi kk", "gyet manman w", "pouri", "bouda fon", "trip pouri", "koko santi", "kalanbe"];
-let badWordStrikes = {}; 
 let warnings = {};
 let blacklist = [];
-let deletedMessages = {}; 
 
-app.get('/', (req, res) => res.status(200).send('GSS-BETA Status: Active'));
+app.get('/', (req, res) => res.status(200).send('GSS-BETA Online'));
 app.listen(port, "0.0.0.0");
 
 async function startHisoka() {
@@ -51,42 +48,26 @@ async function startHisoka() {
     
     const client = goutamConnect({
         logger: pino({ level: "silent" }),
-        // 🛠️ FIXED BROWSER STRING FOR VALID PAIRING
         browser: ["Ubuntu", "Chrome", "20.0.04"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         version,
-        syncFullHistory: false,
-        markOnlineOnConnect: true,
-        printQRInTerminal: false,
-        mobile: false
+        markOnlineOnConnect: true
     });
 
-    // 📲 PAIRING LOGIC
+    // 📲 FORCED PAIRING CODE FOR HARDCODED NUMBER
     if (!client.authState.creds.registered) {
         await delay(5000); 
         let code = await client.requestPairingCode(PAIRING_NUMBER);
         console.log(chalk.white.bgRed.bold(`\n 📲 PAIRING CODE FOR ${PAIRING_NUMBER}: ${code} \n`));
     }
 
-    client.ev.on("messages.update", async (chatUpdate) => {
-        if (!global.db.antidelete) return;
-        for (const { key, update } of chatUpdate) {
-            if (update.protocolMessage?.type === 0) {
-                deletedMessages[key.remoteJid] = { key, participant: key.participant, message: update.protocolMessage };
-            }
-        }
-    });
-
-    client.ev.on("connection.update", async (update) => {
+    client.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection === "close") {
-            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startHisoka();
-        } else if (connection === "open") {
-            console.log(chalk.green.bold("✅ GSS-BETA ONLINE"));
-        }
+        if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startHisoka();
+        else if (connection === "open") console.log(chalk.green.bold("✅ GSS-BETA CONNECTED"));
     });
 
     client.ev.on("creds.update", saveCreds);
@@ -105,32 +86,24 @@ async function startHisoka() {
             const lowerBody = body.toLowerCase();
             const reply = (text) => client.sendMessage(from, { text }, { quoted: mek });
 
-            if (blacklist.includes(senderNumber) && !isOwner) {
-                return await client.groupParticipantsUpdate(from, [sender], "remove");
-            }
-
+            // 🛡️ ANTI-BADWORD SYSTEM
             if (isGroup && global.db.antibadword && !isOwner) {
                 if (badWords.some(word => lowerBody.includes(word))) {
                     await client.sendMessage(from, { delete: mek.key });
                     if (!global.db.antibadwordnokick) {
-                        badWordStrikes[senderNumber] = (badWordStrikes[senderNumber] || 0) + 1;
-                        if (badWordStrikes[senderNumber] >= 3) {
-                            reply("🚫 Auto-Kick: 3 strikes reached.");
-                            await client.groupParticipantsUpdate(from, [sender], "remove");
-                            delete badWordStrikes[senderNumber];
-                        } else { reply(`⚠️ Warning @${senderNumber} [${badWordStrikes[senderNumber]}/3]`); }
+                        await client.groupParticipantsUpdate(from, [sender], "remove");
+                        reply("🚫 Bad word detected. User removed.");
+                    } else {
+                        reply("🚫 Watch your language!");
                     }
-                    return;
                 }
             }
 
             if (!body.startsWith(".")) return;
-            if (!isOwner && !lowerBody.startsWith(".menu") && !lowerBody.startsWith(".owner")) return;
-
             const args = body.slice(1).trim().split(/ +/);
             const command = args.shift().toLowerCase();
             const q = args.join(" ");
-            const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || (q.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
+            const mentioned = mek.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
 
             switch (command) {
                 case 'menu':
@@ -140,7 +113,6 @@ async function startHisoka() {
                     const mins = Math.floor((uptime % 3600) / 60);
                     const time = moment.tz('America/Port-au-Prince').format('HH:mm:ss');
                     const date = moment.tz('America/Port-au-Prince').format('DD/MM/YYYY');
-                    
                     let menuMsg = `╭───『 *${botName}* 』───
 │ Hi 👋
 │ ✨ *${ownerName}*
@@ -151,6 +123,7 @@ async function startHisoka() {
 │ Bot Name : ${botName}
 │ Owner Name : ${ownerName}
 │ Prefix : .
+│ Total Users : 8
 │ Uptime : ${hours}h ${mins}m
 │ Mode : Public
 │
@@ -164,7 +137,7 @@ async function startHisoka() {
 │ Date : ${date}
 │
 ├─『 *Commands* 』
-│ .ping | .ai | .vv | .owner
+│ .ping | .ai | .vv | .owner | .steal
 │ .tagall | .hidetag | .kick
 │ .promote | .demote | .add
 │ .mute | .unmute | .kickall
@@ -175,61 +148,48 @@ async function startHisoka() {
 │ .warn | .unwarn | .blacklist
 ╰───────────────────
 > 💡 Please Type .help for info`;
-
                     await client.sendMessage(from, { 
-                        video: { url: 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJueXF4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/vA07zct9tyTLO/giphy.gif' }, 
+                        video: { url: 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3NueXF4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/vA07zct9tyTLO/giphy.gif' }, 
                         caption: menuMsg, gifPlayback: true, mentions: [sender]
                     }, { quoted: mek });
                     break;
 
-                case 'owner': reply(isOwner ? "✅ Status: Recognized Master." : "❌ Status: Unknown User."); break;
+                case 'ping': reply(`⚡ Pong! ${Date.now() - mek.messageTimestamp * 1000}ms`); break;
+                case 'owner': reply(`Owner: wa.me/${global.owner[0]}`); break;
+                case 'steal':
+                    const quoted = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
+                    if (!quoted?.stickerMessage) return reply("Reply to a sticker.");
+                    const stream = await downloadContentFromMessage(quoted.stickerMessage, 'sticker');
+                    let buffer = Buffer.from([]);
+                    for await(const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
+                    await client.sendMessage(from, { sticker: buffer }, { quoted: mek });
+                    break;
+
+                case 'tagall':
+                    if (!isGroup || !isOwner) return;
+                    const meta = await client.groupMetadata(from);
+                    const users = meta.participants.map(u => u.id);
+                    client.sendMessage(from, { text: q ? q : "@everyone", mentions: users }, { quoted: mek });
+                    break;
+
+                case 'kick': if (isOwner && isGroup) await client.groupParticipantsUpdate(from, mentioned, "remove"); break;
+                case 'add': if (isOwner && isGroup) await client.groupParticipantsUpdate(from, [q + "@s.whatsapp.net"], "add"); break;
+                case 'promote': case 'demote': if (isOwner && isGroup) await client.groupParticipantsUpdate(from, mentioned, command); break;
+                case 'mute': case 'unmute': if (isOwner && isGroup) await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement'); break;
                 
-                case 'kickall':
-                    if (q === 'confirm') {
-                        const meta = await client.groupMetadata(from);
-                        const targets = meta.participants.filter(p => !global.owner.includes(p.id.replace(/[^0-9]/g, '')) && !p.admin);
-                        for (let t of targets) { await client.groupParticipantsUpdate(from, [t.id], "remove"); await delay(1000); }
-                        reply("✅ Group Cleaned.");
-                    } else { reply("🛑 Safety: Type `.kickall confirm` to wipe."); }
-                    break;
-
-                case 'warn':
-                    warnings[mentioned] = (warnings[mentioned] || 0) + 1;
-                    if (warnings[mentioned] >= 3) {
-                        await client.groupParticipantsUpdate(from, [mentioned], "remove");
-                        delete warnings[mentioned];
-                        reply("🚫 Removed.");
-                    } else { reply(`⚠️ Warning @${mentioned.split('@')[0]} [${warnings[mentioned]}/3]`); }
-                    break;
-
-                case 'blacklist':
-                    if (args[0] === 'add') { blacklist.push(mentioned.replace(/[^0-9]/g, '')); reply("🚫 Added."); }
-                    else if (args[0] === 'del') { blacklist = blacklist.filter(u => u !== mentioned.replace(/[^0-9]/g, '')); reply("✅ Removed."); }
-                    break;
-
-                case 'antilink':
-                case 'antibot':
-                case 'antiwame':
-                case 'antitagall':
-                case 'antibadword':
-                case 'antibadwordnokick':
-                case 'antispam':
-                case 'antifake':
-                case 'antidelete':
+                case 'antilink': case 'antibot': case 'antibadword': case 'antibadwordnokick':
+                    if (!isOwner) return;
                     global.db[command] = q === 'on';
-                    reply(`🛡️ ${command.toUpperCase()} -> ${q.toUpperCase()}`);
+                    reply(`🛡️ ${command.toUpperCase()} set to ${q.toUpperCase()}`);
                     break;
 
-                case 'ping': reply("⚡ Online."); break;
-                case 'bc':
-                case 'broadcast':
-                    if (!q) return reply("Text required.");
-                    const groups = Object.keys(await client.groupFetchAllParticipating());
-                    for (let i of groups) { await client.sendMessage(i, { text: `📢 *BROADCAST*\n\n${q}` }); }
-                    reply(`✅ Sent to ${groups.length} groups.`);
+                case 'kickall':
+                    if (!isOwner || q !== 'confirm') return reply("Type .kickall confirm");
+                    const fullMeta = await client.groupMetadata(from);
+                    for (let mem of fullMeta.participants) { if (!mem.admin && !global.owner.includes(mem.id.split('@')[0])) await client.groupParticipantsUpdate(from, [mem.id], "remove"); }
                     break;
             }
-        } catch (e) { console.error(e); }
+        } catch (e) { console.log(e); }
     });
 }
 startHisoka();
