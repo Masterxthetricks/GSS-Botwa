@@ -20,7 +20,7 @@ const dbPath = path.join(__dirname, 'database.json');
 
 if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
 
-// 💾 PERSISTENT DATABASE INITIALIZATION
+// 💾 DATABASE INIT
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
         antilink: false, antibot: false, antiwame: false, antitagall: false,
@@ -51,30 +51,31 @@ async function startHisoka() {
     const client = goutamConnect({
         version,
         logger: pino({ level: "silent" }),
-        // 🚀 STABILITY FIX: Hardcoded identity to prevent 'Couldn't Link'
-        browser: ["Chrome (Linux)", "GSS-BETA", "1.0.0"], 
+        // 🚀 UPDATED BROWSER IDENTITY
+        browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         printQRInTerminal: false,
         mobile: false, 
-        connectTimeoutMs: 60000, 
+        connectTimeoutMs: 100000, // Increased timeout
+        defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 30000,
-        syncFullHistory: false, // 🚀 Faster linking, avoids Koyeb freeze
+        syncFullHistory: false,
         maxMsgRetryCount: 1,
         markOnlineOnConnect: true
     });
 
-    // 📲 FORCED PAIRING LOGIC
+    // 📲 PAIRING LOGIC
     if (!client.authState.creds.registered) {
-        console.log(chalk.yellow(`\n[!] Requesting pairing code for: ${PAIRING_NUMBER}\n`));
+        console.log(chalk.yellow(`\n[!] Waiting for socket stabilization before code...`));
         setTimeout(async () => {
             try {
                 let code = await client.requestPairingCode(PAIRING_NUMBER.replace(/[^0-9]/g, ''));
                 console.log(chalk.black.bgGreen.bold(`\n 📲 PAIRING CODE: ${code} \n`));
             } catch (e) { console.log("Pairing Error", e); }
-        }, 8000); 
+        }, 12000); // 12 seconds wait
     }
 
     client.ev.on("creds.update", saveCreds);
@@ -96,8 +97,6 @@ async function startHisoka() {
             const isGroup = from.endsWith('@g.us');
             const sender = mek.key.participant || from;
             const senderNumber = sender.replace(/[^0-9]/g, '');
-            
-            // 🔒 STRICT OWNER CHECK
             const isOwner = global.owner.includes(senderNumber) || global.db.whitelist.includes(senderNumber);
             const botNumber = client.user.id.split(':')[0] + '@s.whatsapp.net';
             const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
@@ -107,7 +106,7 @@ async function startHisoka() {
             const groupMetadata = isGroup ? await client.groupMetadata(from) : null;
             const isBotAdmin = isGroup ? groupMetadata.participants.find(v => v.id == botNumber)?.admin : false;
 
-            // 🛡️ AUTO-SECURITY
+            // AUTO-SECURITY
             if (isGroup && isBotAdmin && !isOwner) {
                 if (global.db.antilink && lowerBody.includes("chat.whatsapp.com")) {
                     await client.sendMessage(from, { delete: mek.key });
@@ -118,7 +117,6 @@ async function startHisoka() {
                 }
             }
 
-            // 🛑 COMMAND LOCK (Owner Only)
             if (!body.startsWith(".") || !isOwner) return;
 
             const args = body.slice(1).trim().split(/ +/);
@@ -176,11 +174,6 @@ async function startHisoka() {
                     if (!isGroup || !isBotAdmin) return;
                     await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
                     reply(`✅ Done.`);
-                    break;
-
-                case 'kickall':
-                    const all = groupMetadata.participants.filter(v => !global.owner.includes(v.id.split('@')[0]) && v.id !== botNumber);
-                    for (let mem of all) { await client.groupParticipantsUpdate(from, [mem.id], "remove"); await delay(500); }
                     break;
 
                 case 'status':
