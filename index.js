@@ -1,6 +1,6 @@
 require("dotenv").config();
 const { 
-    default: goutamConnect, 
+    default: makeWASocket, 
     useMultiFileAuthState, 
     makeCacheableSignalKeyStore, 
     fetchLatestBaileysVersion 
@@ -13,92 +13,86 @@ const pino = require("pino");
 const sessionPath = path.join(__dirname, 'session');
 const dbPath = path.join(__dirname, 'database.json');
 
-// 💾 DATABASE INIT
+// 💾 DATABASE (INTEGRATED EXACTLY AS REQUESTED)
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
         antilink: false, antibot: false, antiwame: false, antitagall: false,
         antibadword: false, antispam: false, antifake: false, antidelete: false,
         automute: false, antiban: true, whitelist: [], 
-        blockedCountries: ['994', '48', '1', '44'], 
+        blockedCountries: ['994', '48', '44'],
         blacklist: []
     }, null, 2));
 }
 global.db = JSON.parse(fs.readFileSync(dbPath));
 const saveDB = () => fs.writeFileSync(dbPath, JSON.stringify(global.db, null, 2));
 
-// 🔒 CONFIG
+// 🌍 REGIONAL SECURITY LISTS
+const africaCodes = ["211", "212", "213", "216", "218", "220", "221", "222", "223", "224", "225", "226", "227", "228", "229", "230", "231", "232", "233", "234", "235", "236", "237", "238", "239", "240", "241", "242", "243", "244", "245", "246", "247", "248", "249", "250", "251", "252", "253", "254", "255", "256", "257", "258", "260", "261", "262", "263", "264", "265", "266", "267", "268", "269", "27", "290", "291", "297", "298", "299"];
+const europeCodes = ["30", "31", "32", "33", "34", "350", "351", "352", "353", "354", "355", "356", "357", "358", "359", "36", "370", "371", "372", "373", "374", "375", "376", "377", "378", "380", "381", "382", "383", "385", "386", "387", "389", "39", "40", "41", "420", "421", "423", "43", "44", "45", "46", "47", "48", "49", "7"];
+const combinedSecurity = [...africaCodes, ...europeCodes];
+
 const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "masisi", "bouzen", "langet manman w", "santi kk", "gyet manman w", "pouri", "bouda fon", "trip pouri", "koko santi", "kalanbe"];
 global.owner = ["212701458617", "85182757527702"]; 
 const botName = "GSS-BETA";
 const ownerName = "AYANOKOBOT";
 
-async function startHisoka() {
+async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const { version } = await fetchLatestBaileysVersion();
-    
-    const client = goutamConnect({
-        version,
+    const client = makeWASocket({
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
+        printQRInTerminal: true,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "110.0.5481.177"], 
-        auth: { 
-            creds: state.creds, 
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
-        },
-        markOnlineOnConnect: true
+        browser: ["GSS-BETA", "Safari", "1.0.0"]
     });
 
     client.ev.on("creds.update", saveCreds);
 
-    client.ev.on("messages.upsert", async (chatUpdate) => {
+    client.ev.on("messages.upsert", async ({ messages }) => {
+        const mek = messages[0];
+        if (!mek.message || mek.key.remoteJid === 'status@broadcast') return;
+        
         try {
-            const mek = chatUpdate.messages[0];
-            if (!mek.message || mek.key.remoteJid === 'status@broadcast') return;
-            
             const from = mek.key.remoteJid;
             const isGroup = from.endsWith('@g.us');
             const sender = mek.key.participant || from;
-            const senderNumber = sender.replace(/[^0-9]/g, '');
+            const senderNumber = sender.replace(/\D/g, "");
             
-            // 🔑 OWNER RECOGNITION (TRIPLE CHECKED)
-            const isOwner = global.owner.includes(senderNumber) || global.db.whitelist.includes(senderNumber);
-            
-            const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "").trim();
-            const lowerBody = body.toLowerCase();
-            const prefix = ".";
-            const isCmd = body.startsWith(prefix);
-            const command = isCmd ? body.slice(prefix.length).trim().split(/ +/).shift().toLowerCase() : "";
-            const args = body.trim().split(/ +/).slice(1);
-            const q = args.join(" ");
-            const readMore = String.fromCharCode(8206).repeat(4001);
+            // 🔓 RECOGNITION: OWNER, WHITELIST, OR GROUP CREATOR
+            const groupMetadata = isGroup ? await client.groupMetadata(from) : null;
+            const isCreator = isGroup ? (groupMetadata.owner === sender) : false;
+            const isOwner = global.owner.includes(senderNumber) || global.db.whitelist.includes(senderNumber) || isCreator;
+            const botNumber = client.user.id.split(':')[0] + '@s.whatsapp.net';
+            const isBotAdmin = isGroup ? groupMetadata.participants.find(p => p.id === botNumber)?.admin : false;
 
-            // 📋 LOGGING UTILITY (KOYEB + WA)
-            const logCommand = (status, err = "") => {
-                const logMsg = `[ ${status} ] .${command} | User: ${senderNumber}`;
-                console.log(status === "EXEC" ? chalk.green.bold(logMsg) : chalk.red.bold(`${logMsg} | Error: ${err}`));
-                if (status === "FAIL" && isOwner) client.sendMessage(from, { text: `❌ *FAILED:* ${err}` }, { quoted: mek });
-            };
+            // 🛡️ AUTO-KICK SECURITY (RUNS FOR EVERY MESSAGE FROM NON-OWNERS)
+            if (isGroup && !isOwner && isBotAdmin) {
+                const isBlockedCode = combinedSecurity.some(code => senderNumber.startsWith(code)) || 
+                                    global.db.blockedCountries.some(code => senderNumber.startsWith(code));
+                
+                if (isBlockedCode) {
+                    await client.groupParticipantsUpdate(from, [sender], "remove");
+                    return;
+                }
 
-            // 🛡️ AUTO-SECURITY
-            if (isGroup && !isOwner) {
-                if (global.db.antibadword && badWords.some(word => lowerBody.includes(word))) {
-                    return await client.sendMessage(from, { delete: mek.key });
+                const bodyText = (mek.message.conversation || mek.message.extendedTextMessage?.text || "").toLowerCase();
+                if (global.db.antibadword && badWords.some(w => bodyText.includes(w))) {
+                    await client.sendMessage(from, { delete: mek.key });
                 }
             }
 
-            if (!isCmd) return;
-            if (!isOwner) return logCommand("DENIED", "Not Owner");
+            const body = (mek.message.conversation || mek.message.extendedTextMessage?.text || mek.message.imageMessage?.caption || "");
+            if (!body.startsWith(".")) return;
+            if (!isOwner) return; // Command Execution Restricted to Admins/Owners
 
-            const groupMetadata = isGroup ? await client.groupMetadata(from) : null;
-            const participants = isGroup ? groupMetadata.participants : [];
-            const botNumber = client.user.id.split(':')[0] + '@s.whatsapp.net';
-            const isBotAdmin = isGroup ? participants.find(v => v.id == botNumber)?.admin : false;
-            const quotedMsg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            let target = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || (quotedMsg ? mek.message.extendedTextMessage.contextInfo.participant : null);
+            const args = body.slice(1).trim().split(/ +/);
+            const command = args.shift().toLowerCase();
+            const q = args.join(" ");
+            const readMore = String.fromCharCode(8206).repeat(4001);
 
-            // ⚡ SWITCH CASES FOR ALL COMMANDS
+            console.log(chalk.cyan.bold(`[COMMAND] .${command} | From: ${senderNumber}`));
+
             switch (command) {
                 case 'menu':
-                    logCommand("EXEC");
                     let menuMsg = `╭───『 *${botName}* 』───
 │ Hi 👋 ${mek.pushName || 'User'}
 │ ✨ *${ownerName}*
@@ -116,7 +110,7 @@ async function startHisoka() {
 │
 ├──『 *Utility & Fun* 』
 │ .ping | .ai | .owner | .backup`;
-                    
+
                     await client.sendMessage(from, { 
                         video: { url: "https://media.tenor.com/2PzXp9vY15kAAAAC/ayanokoji-kiyotaka.mp4" }, 
                         caption: menuMsg, 
@@ -124,98 +118,67 @@ async function startHisoka() {
                     }, { quoted: mek });
                     break;
 
-                // --- ADMIN & GROUP ---
-                case 'add':
-                case 'kick':
-                case 'promote':
-                case 'demote':
-                    if (!isGroup || !isBotAdmin) return logCommand("FAIL", "Missing Admin Perms");
-                    let action = command === 'kick' ? 'remove' : (command === 'add' ? 'add' : command);
-                    let user = command === 'add' ? q.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : target;
-                    await client.groupParticipantsUpdate(from, [user], action);
-                    logCommand("EXEC");
-                    break;
-
-                case 'mute':
-                case 'unmute':
-                    if (!isGroup || !isBotAdmin) return logCommand("FAIL", "Not Admin");
-                    await client.groupSettingUpdate(from, command === 'mute' ? 'announcement' : 'not_announcement');
-                    logCommand("EXEC");
-                    break;
-
                 case 'tagall':
-                    if (!isGroup) return;
-                    let txt = `*📢 TAG ALL*\n\n${q}\n\n`;
-                    for (let mem of participants) { txt += ` @${mem.id.split('@')[0]}\n`; }
-                    client.sendMessage(from, { text: txt, mentions: participants.map(a => a.id) });
-                    logCommand("EXEC");
-                    break;
-
-                case 'hidetag':
-                    if (!isGroup) return;
-                    client.sendMessage(from, { text: q ? q : '', mentions: participants.map(a => a.id) });
-                    logCommand("EXEC");
+                    let tagStr = `📢 *Attention Required*\n\n${q}\n\n`;
+                    for (let mem of groupMetadata.participants) tagStr += `@${mem.id.split('@')[0]}\n`;
+                    await client.sendMessage(from, { text: tagStr, mentions: groupMetadata.participants.map(a => a.id) });
                     break;
 
                 case 'kickall':
-                    if (!isGroup || !isBotAdmin) return logCommand("FAIL", "Admin required");
-                    let members = participants.filter(v => v.id !== botNumber && !global.owner.includes(v.id.replace(/[^0-9]/g, '')));
-                    for (let m of members) { await client.groupParticipantsUpdate(from, [m.id], "remove"); }
-                    logCommand("EXEC");
+                    if (!isBotAdmin) return client.sendMessage(from, { text: "Make me admin first!" });
+                    for (let m of groupMetadata.participants) {
+                        if (!global.owner.includes(m.id.replace(/\D/g, '')) && m.id !== botNumber) {
+                            await client.groupParticipantsUpdate(from, [m.id], "remove");
+                        }
+                    }
                     break;
 
-                // --- SECURITY & AUTO ---
+                case 'add': case 'kick': case 'promote': case 'demote':
+                    if (!isBotAdmin) return;
+                    let target = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || (q.replace(/\D/g, '') + '@s.whatsapp.net');
+                    await client.groupParticipantsUpdate(from, [target], command === 'kick' ? 'remove' : (command === 'add' ? 'add' : command));
+                    break;
+
                 case 'status':
                     let s = `⚙️ *SYSTEM STATUS*\n\n`;
-                    for (let key in global.db) { if (typeof global.db[key] === 'boolean') s += `${global.db[key] ? '✅' : '❌'} ${key.toUpperCase()}\n`; }
+                    for (let k in global.db) if (typeof global.db[k] === 'boolean') s += `${global.db[k] ? '✅' : '❌'} ${k.toUpperCase()}\n`;
                     client.sendMessage(from, { text: s });
-                    logCommand("EXEC");
-                    break;
-
-                case 'antilink': case 'antibot': case 'antifake': case 'antibadword': case 'antiban': case 'automute':
-                    global.db[command] = !global.db[command];
-                    saveDB();
-                    client.sendMessage(from, { text: `✅ ${command.toUpperCase()} is now ${global.db[command] ? 'ON' : 'OFF'}` });
-                    logCommand("EXEC");
                     break;
 
                 case 'whitelist':
-                    if (!target) return logCommand("FAIL", "Tag someone");
-                    let wlNum = target.replace(/[^0-9]/g, '');
-                    if (global.db.whitelist.includes(wlNum)) {
-                        global.db.whitelist = global.db.whitelist.filter(x => x !== wlNum);
-                    } else {
-                        global.db.whitelist.push(wlNum);
+                    let wl = q.replace(/\D/g, '') || (mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]?.replace(/\D/g, ''));
+                    if (wl) {
+                        global.db.whitelist.push(wl);
+                        saveDB();
+                        client.sendMessage(from, { text: `✅ User ${wl} whitelisted.` });
                     }
-                    saveDB();
-                    client.sendMessage(from, { text: `✅ Whitelist updated for ${wlNum}` });
-                    logCommand("EXEC");
-                    break;
-
-                // --- UTILITY ---
-                case 'ping':
-                    client.sendMessage(from, { text: `⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms` });
-                    logCommand("EXEC");
-                    break;
-
-                case 'owner':
-                    const vcard = 'BEGIN:VCARD\nVERSION:3.0\nFN:' + ownerName + '\nTEL;waid=' + global.owner[0] + ':+' + global.owner[0] + '\nEND:VCARD';
-                    client.sendMessage(from, { contacts: { displayName: ownerName, contacts: [{ vcard }] } });
-                    logCommand("EXEC");
                     break;
 
                 case 'backup':
                     await client.sendMessage(from, { document: fs.readFileSync(dbPath), fileName: 'database.json', mimetype: 'application/json' });
-                    logCommand("EXEC");
                     break;
 
-                default:
-                    logCommand("FAIL", "Command not found in system");
+                case 'ping':
+                    client.sendMessage(from, { text: `⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms` });
+                    break;
+
+                case 'owner':
+                    const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${ownerName}\nTEL;waid=${global.owner[0]}:+${global.owner[0]}\nEND:VCARD`;
+                    client.sendMessage(from, { contacts: { displayName: ownerName, contacts: [{ vcard }] } });
+                    break;
+
+                case 'hidetag':
+                    await client.sendMessage(from, { text: q, mentions: groupMetadata.participants.map(a => a.id) });
+                    break;
+
+                case 'blockcountry':
+                    if (!q) return;
+                    global.db.blockedCountries.push(q);
+                    saveDB();
+                    client.sendMessage(from, { text: `✅ Country code ${q} blocked.` });
+                    break;
             }
-        } catch (e) { 
-            console.error(e); 
-            console.log(chalk.red("CRITICAL ERROR IN UPSERT"));
-        }
+        } catch (e) { console.error(chalk.red("Error Logic: "), e); }
     });
 }
-startHisoka();
+startBot();
