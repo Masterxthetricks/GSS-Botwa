@@ -10,12 +10,12 @@ const fs = require("fs");
 const path = require('path');
 const chalk = require("chalk");
 const pino = require("pino");
-const qrcode = require("qrcode-terminal"); // Required for terminal QR
+const qrcode = require("qrcode-terminal");
 
 const sessionPath = path.join(__dirname, 'session');
 const dbPath = path.join(__dirname, 'database.json');
 
-// 💾 DATABASE
+// 💾 DATABASE INITIALIZATION
 if (!fs.existsSync(dbPath)) {
     fs.writeFileSync(dbPath, JSON.stringify({
         antilink: false, antibot: false, antiwame: false, antitagall: false,
@@ -39,34 +39,51 @@ const ownerName = "AYANOKOBOT";
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
     
     const client = makeWASocket({
+        version,
         auth: { 
             creds: state.creds, 
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
         },
         logger: pino({ level: "silent" }),
-        browser: ["GSS-BETA", "Safari", "1.0.0"]
+        browser: ["Ubuntu", "Chrome", "110.0.5481.177"],
+        markOnlineOnConnect: true
     });
 
-    // 📱 HANDLE QR & CONNECTION (FIXED FOR KOYEB)
-    client.ev.on("connection.update", (update) => {
+    // 📱 IMPROVED CONNECTION HANDLER
+    client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
+        
         if (qr) {
-            console.log(chalk.yellow.bold("SCAN THE QR CODE BELOW:"));
+            console.log(chalk.magenta.bold("\n📢 [ACTION] SCAN THE QR BELOW TO START:"));
             qrcode.generate(qr, { small: true });
         }
+
         if (connection === "close") {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log("Connection closed. Reconnecting:", shouldReconnect);
-            if (shouldReconnect) startBot();
+            let reason = lastDisconnect?.error?.output?.statusCode;
+            console.log(chalk.yellow(`Connection Closed. Reason Code: ${reason}`));
+
+            if (reason === DisconnectReason.restartRequired || reason === DisconnectReason.connectionLost) {
+                console.log(chalk.blue("🔄 Restarting in 5 seconds..."));
+                setTimeout(() => startBot(), 5000);
+            } else if (reason === DisconnectReason.loggedOut) {
+                console.log(chalk.red("❌ Logged out. Delete session folder and scan again."));
+                process.exit();
+            } else {
+                console.log(chalk.cyan("🔄 Attempting Reconnect..."));
+                startBot();
+            }
         } else if (connection === "open") {
-            console.log(chalk.green.bold("✅ GSS-BETA IS NOW ONLINE"));
+            console.log(chalk.green.bold("\n✅ SUCCESS: GSS-BETA IS CONNECTED AND ONLINE\n"));
+            client.sendMessage(global.owner[0] + "@s.whatsapp.net", { text: `🚀 *${botName}* is now active on Koyeb!` });
         }
     });
 
     client.ev.on("creds.update", saveCreds);
 
+    // 📩 MESSAGE HANDLER
     client.ev.on("messages.upsert", async ({ messages }) => {
         const mek = messages[0];
         if (!mek.message || mek.key.remoteJid === 'status@broadcast') return;
@@ -83,7 +100,7 @@ async function startBot() {
             const botNumber = client.user.id.split(':')[0] + '@s.whatsapp.net';
             const isBotAdmin = isGroup ? groupMetadata.participants.find(p => p.id === botNumber)?.admin : false;
 
-            // 🛡️ AUTO-SECURITY (QUADRUPLE CHECKED)
+            // 🛡️ SECURITY LAYER
             if (isGroup && !isOwner && isBotAdmin) {
                 const isBlocked = combinedSecurity.some(code => senderNumber.startsWith(code)) || 
                                   global.db.blockedCountries.some(code => senderNumber.startsWith(code));
@@ -107,6 +124,7 @@ async function startBot() {
             const q = args.join(" ");
             const readMore = String.fromCharCode(8206).repeat(4001);
 
+            // ⚡ EXECUTION SWITCH
             switch (command) {
                 case 'menu':
                     let menuMsg = `╭───『 *${botName}* 』───
@@ -121,8 +139,7 @@ async function startBot() {
 ├─『 *Security/Auto* 』
 │ .antilink | .antibot | .antifake
 │ .antibadword | .antiban | .status
-│ .blockcountry | .addanime | .automute
-│ .whitelist
+│ .blockcountry | .whitelist
 │
 ├──『 *Utility & Fun* 』
 │ .ping | .ai | .owner | .backup`;
@@ -134,44 +151,26 @@ async function startBot() {
                     }, { quoted: mek });
                     break;
 
+                case 'ping':
+                    client.sendMessage(from, { text: `⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms` });
+                    break;
+
                 case 'tagall':
-                    let str = `📢 *TAG ALL*\n\n${q}\n\n`;
-                    for (let m of groupMetadata.participants) str += `@${m.id.split('@')[0]}\n`;
-                    await client.sendMessage(from, { text: str, mentions: groupMetadata.participants.map(a => a.id) });
+                    let s = `📢 *TAG ALL*\n\n${q}\n\n`;
+                    for (let m of groupMetadata.participants) s += `@${m.id.split('@')[0]}\n`;
+                    client.sendMessage(from, { text: s, mentions: groupMetadata.participants.map(a => a.id) });
                     break;
 
                 case 'kickall':
-                    if (!isBotAdmin) return client.sendMessage(from, { text: "Bot must be admin!" });
                     for (let m of groupMetadata.participants) {
                         if (!global.owner.includes(m.id.replace(/\D/g, '')) && m.id !== botNumber) {
                             await client.groupParticipantsUpdate(from, [m.id], "remove");
                         }
                     }
                     break;
-
-                case 'add': case 'kick': case 'promote': case 'demote':
-                    if (!isBotAdmin) return;
-                    let target = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || (q.replace(/\D/g, '') + '@s.whatsapp.net');
-                    await client.groupParticipantsUpdate(from, [target], command === 'kick' ? 'remove' : (command === 'add' ? 'add' : command));
-                    break;
-
-                case 'status':
-                    let s = `⚙️ *SYSTEM STATUS*\n\n`;
-                    for (let k in global.db) if (typeof global.db[k] === 'boolean') s += `${global.db[k] ? '✅' : '❌'} ${k.toUpperCase()}\n`;
-                    client.sendMessage(from, { text: s });
-                    break;
-
-                case 'ping':
-                    client.sendMessage(from, { text: `⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms` });
-                    break;
-                
-                case 'backup':
-                    await client.sendMessage(from, { document: fs.readFileSync(dbPath), fileName: 'database.json', mimetype: 'application/json' });
-                    break;
             }
         } catch (e) { console.error(e); }
     });
 }
 
-// Start and prevent script from closing
-startBot().catch(err => console.log("Startup Error: ", err));
+startBot();
