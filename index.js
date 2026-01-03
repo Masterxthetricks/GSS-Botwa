@@ -3,12 +3,13 @@ const {
     default: makeWASocket, 
     useMultiFileAuthState, 
     makeCacheableSignalKeyStore, 
-    pino,
-    DisconnectReason
+    DisconnectReason,
+    downloadContentFromMessage
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require('path');
 const chalk = require("chalk");
+const pino = require("pino"); // Fix: Import pino separately
 
 const sessionPath = path.join(__dirname, 'session');
 const dbPath = path.join(__dirname, 'database.json');
@@ -39,10 +40,15 @@ const badWords = ["fuck you", "djol santi", "pussy", "bouda santi", "bitch", "ma
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    
     const client = makeWASocket({
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
+        auth: { 
+            creds: state.creds, 
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) 
+        },
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        printQRInTerminal: false
     });
 
     if (!client.authState.creds.registered) {
@@ -55,8 +61,7 @@ async function startBot() {
     client.ev.on("creds.update", saveCreds);
     client.ev.on("connection.update", (u) => { if (u.connection === "close") startBot(); });
 
-    // 🛡️ ANTI-DELETE (PRIVATE REPORTING)
-    client.ev.on("messages.upsert", async ({ messages, type }) => {
+    client.ev.on("messages.upsert", async ({ messages }) => {
         const mek = messages[0];
         if (!mek.message || mek.key.remoteJid === 'status@broadcast') return;
         
@@ -74,20 +79,16 @@ async function startBot() {
 
             // 🛡️ AUTOMATIC SECURITY ACTIONS
             if (isGroup && isBotAdmin && !isOwner) {
-                // Country Code Filter
                 const isBlockedCountry = combinedSecurity.some(code => senderNumber.startsWith(code)) || global.db.blockedCountries.some(code => senderNumber.startsWith(code));
-                if (isBlockedCountry) return await client.groupParticipantsUpdate(from, [sender], "remove");
+                if (isBlockedCountry || global.db.blacklist.includes(senderNumber)) {
+                    return await client.groupParticipantsUpdate(from, [sender], "remove");
+                }
 
-                // Blacklist Filter
-                if (global.db.blacklist.includes(senderNumber)) return await client.groupParticipantsUpdate(from, [sender], "remove");
-
-                // Antilink
                 if (global.db.antilink && (body.includes("chat.whatsapp.com") || body.includes("wa.me/"))) {
                     await client.sendMessage(from, { delete: mek.key });
                     return await client.groupParticipantsUpdate(from, [sender], "remove");
                 }
 
-                // Antibadword Warning System
                 if (global.db.antibadword && badWords.some(w => body.includes(w))) {
                     await client.sendMessage(from, { delete: mek.key });
                     if (!global.db.antibadwordnokick) {
@@ -99,7 +100,7 @@ async function startBot() {
                             global.db.warns[sender] = 0;
                             saveDB();
                         } else {
-                            client.sendMessage(from, { text: `⚠️ Warning @${senderNumber} (${global.db.warns[sender]}/3). No bad words!`, mentions: [sender] });
+                            client.sendMessage(from, { text: `⚠️ Warning @${senderNumber} (${global.db.warns[sender]}/3).`, mentions: [sender] });
                         }
                     }
                 }
@@ -139,39 +140,11 @@ async function startBot() {
                     }, { quoted: mek });
                     break;
 
-                case 'warn': case 'unwarn':
-                    let t = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || q.replace(/\D/g, '') + '@s.whatsapp.net';
-                    if (global.owner.includes(t.replace(/\D/g, ''))) return;
-                    global.db.warns[t] = command === 'warn' ? (global.db.warns[t] || 0) + 1 : 0;
-                    saveDB();
-                    client.sendMessage(from, { text: `User @${t.split('@')[0]} warnings: ${global.db.warns[t]}/3`, mentions: [t] });
-                    if (global.db.warns[t] >= 3) await client.groupParticipantsUpdate(from, [t], "remove");
-                    break;
-
-                case 'blacklist':
-                    let num = q.replace(/\D/g, '');
-                    if (!num) return;
-                    if (global.db.blacklist.includes(num)) {
-                        global.db.blacklist = global.db.blacklist.filter(x => x !== num);
-                        client.sendMessage(from, { text: `Removed ${num} from Blacklist.` });
-                    } else {
-                        global.db.blacklist.push(num);
-                        client.sendMessage(from, { text: `Added ${num} to Permanent Blacklist.` });
-                    }
-                    saveDB();
-                    break;
-
                 case 'vv':
                     let msg = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
                     let type = msg?.viewOnceMessageV2 ? 'viewOnceMessageV2' : (msg?.viewOnceMessage ? 'viewOnceMessage' : null);
                     if (!type) return;
                     await client.copyNForward(from, { key: mek.key, message: msg[type].message }, { quoted: mek });
-                    break;
-
-                case 'kickall':
-                    if (q !== 'confirm') return client.sendMessage(from, { text: "Type `.kickall confirm` to wipe group." });
-                    let mems = groupMetadata.participants.filter(m => m.id !== botNumber && !global.owner.includes(m.id.replace(/\D/g, '')));
-                    for (let m of mems) await client.groupParticipantsUpdate(from, [m.id], "remove");
                     break;
 
                 case 'status':
@@ -180,22 +153,20 @@ async function startBot() {
                     client.sendMessage(from, { text: s });
                     break;
 
-                case 'antilink': case 'antibot': case 'antidelete': case 'antibadword': case 'antibadwordnokick':
+                case 'antilink': case 'antidelete': case 'antibadword': case 'antibadwordnokick':
                     global.db[command] = !global.db[command];
                     saveDB();
-                    client.sendMessage(from, { text: `🛡️ ${command.toUpperCase()} is now ${global.db[command] ? 'ON ✅' : 'OFF ❌'}` });
+                    client.sendMessage(from, { text: `🛡️ ${command.toUpperCase()} is ${global.db[command] ? 'ON ✅' : 'OFF ❌'}` });
                     break;
 
-                case 'add': case 'kick': case 'promote': case 'demote':
-                    let target = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || q.replace(/\D/g, '') + '@s.whatsapp.net';
-                    if (global.owner.includes(target.replace(/\D/g, '')) && command === 'kick') return;
-                    await client.groupParticipantsUpdate(from, [target], command === 'kick' ? 'remove' : (command === 'add' ? 'add' : command));
+                case 'kickall':
+                    if (q !== 'confirm') return client.sendMessage(from, { text: "Type `.kickall confirm` to wipe group." });
+                    let mems = groupMetadata.participants.filter(m => m.id !== botNumber && !global.owner.includes(m.id.replace(/\D/g, '')));
+                    for (let m of mems) await client.groupParticipantsUpdate(from, [m.id], "remove");
                     break;
 
-                case 'tagall': case 'hidetag':
-                    let mms = command === 'tagall' ? `📢 *TAG ALL*\n\n${q}\n\n` : q;
-                    if (command === 'tagall') groupMetadata.participants.forEach(m => mms += `@${m.id.split('@')[0]} `);
-                    client.sendMessage(from, { text: mms, mentions: groupMetadata.participants.map(a => a.id) });
+                case 'ping':
+                    client.sendMessage(from, { text: `⚡ Speed: ${Date.now() - mek.messageTimestamp * 1000}ms` });
                     break;
             }
         } catch (e) { console.error(e); }
